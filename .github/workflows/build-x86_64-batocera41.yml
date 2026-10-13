@@ -1,0 +1,56 @@
+name: Build MAME2003-Plus x86_64 (Batocera 41)
+
+on:
+  push:
+    branches:
+      - build-x86_64-batocera41
+  workflow_dispatch:
+
+jobs:
+  build-x86_64:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential git file binutils
+
+      - name: Build libretro core
+        run: |
+          make clean || true
+          make -j"$(nproc)"
+
+      - name: Verify x86_64 core
+        run: |
+          test -f mame2003_plus_libretro.so
+          file mame2003_plus_libretro.so
+          readelf -h mame2003_plus_libretro.so
+          file mame2003_plus_libretro.so | grep -q 'ELF 64-bit.*x86-64'
+
+      - name: Prepare artifacts
+        run: |
+          mkdir -p artifact
+          cp mame2003_plus_libretro.so artifact/mame2003_plus_libretro.unstripped.so
+          cp mame2003_plus_libretro.so artifact/mame2003_plus_libretro.so
+          strip --strip-unneeded artifact/mame2003_plus_libretro.so
+          {
+            echo 'Target: Linux x86_64 / Batocera 41'
+            echo "Commit: $GITHUB_SHA"
+            echo "Runner: $(uname -a)"
+            echo 'Unstripped:'
+            file artifact/mame2003_plus_libretro.unstripped.so
+            echo 'Stripped:'
+            file artifact/mame2003_plus_libretro.so
+          } > artifact/build-info.txt
+
+      - name: Upload core artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mame2003-plus-libretro-linux-x86_64-batocera41
+          path: artifact/
+          if-no-files-found: error
+          retention-days: 30
