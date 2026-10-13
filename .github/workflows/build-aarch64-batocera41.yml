@@ -1,0 +1,80 @@
+name: Build AArch64 core for Batocera 41
+
+on:
+  push:
+    branches:
+      - build-aarch64-batocera41
+  workflow_dispatch:
+
+jobs:
+  build-aarch64:
+    name: Build mame2003-plus AArch64
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install AArch64 cross compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            gcc-aarch64-linux-gnu \
+            g++-aarch64-linux-gnu \
+            binutils-aarch64-linux-gnu \
+            make \
+            file
+
+      - name: Build AArch64 libretro core
+        env:
+          CC: aarch64-linux-gnu-gcc
+          CXX: aarch64-linux-gnu-g++
+          AR: aarch64-linux-gnu-ar
+          STRIP: aarch64-linux-gnu-strip
+        run: |
+          make clean || true
+          make -j"$(nproc)" \
+            platform=rpi3_64 \
+            CC="$CC" \
+            CXX="$CXX" \
+            AR="$AR"
+
+      - name: Verify output
+        run: |
+          test -f mame2003_plus_libretro.so
+          file mame2003_plus_libretro.so
+          aarch64-linux-gnu-readelf -h mame2003_plus_libretro.so
+          aarch64-linux-gnu-readelf -d mame2003_plus_libretro.so || true
+          file mame2003_plus_libretro.so | grep -q 'ARM aarch64'
+
+      - name: Strip core
+        run: |
+          cp mame2003_plus_libretro.so mame2003_plus_libretro.unstripped.so
+          aarch64-linux-gnu-strip --strip-unneeded mame2003_plus_libretro.so
+          file mame2003_plus_libretro.so
+
+      - name: Package build information
+        run: |
+          mkdir -p artifact
+          cp mame2003_plus_libretro.so artifact/
+          cp mame2003_plus_libretro.unstripped.so artifact/
+          {
+            echo "Repository: $GITHUB_REPOSITORY"
+            echo "Commit: $GITHUB_SHA"
+            echo "Branch: $GITHUB_REF_NAME"
+            echo "Target: Linux AArch64"
+            echo "Make platform: rpi3_64 (Cortex-A53/AArch64)"
+            echo "Intended target: Odroid Go Super / Batocera 41"
+            echo
+            file mame2003_plus_libretro.so
+            echo
+            aarch64-linux-gnu-readelf -h mame2003_plus_libretro.so
+          } > artifact/build-info.txt
+
+      - name: Upload AArch64 core
+        uses: actions/upload-artifact@v4
+        with:
+          name: mame2003-plus-libretro-aarch64-batocera41
+          path: artifact/
+          if-no-files-found: error
+          retention-days: 30
