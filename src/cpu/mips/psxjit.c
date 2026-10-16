@@ -67,6 +67,13 @@ struct jit_block
 
 typedef sljit_u32 (SLJIT_FUNC *jit_func)(void);
 
+static void SLJIT_FUNC loop_skip_helper( sljit_u32 l );	/* psxloop.c */
+
+/* the GTE, in psx_cpu.c */
+static UINT32 getcp2dr( int n_reg );
+static void setcp2dr( int n_reg, UINT32 n_value );
+static void docop2( int gteop );
+
 static int jit_enabled;
 static struct jit_block *jit_table;
 static UINT8 *jit_codemap;
@@ -453,6 +460,131 @@ static void jit_emit_helper( struct sljit_compiler *C, UINT32 op )
 {
 	sljit_emit_op1( C, SLJIT_MOV32, SLJIT_R0, 0, SLJIT_IMM, (sljit_s32)op );
 	sljit_emit_icall( C, SLJIT_CALL, SLJIT_ARGS1V( 32 ), SLJIT_IMM, SLJIT_FUNC_ADDR( jit_helper_step ) );
+}
+
+/*
+	The GTE instructions without the trip through mips_step. Inside a
+	block no load or branch is pending (delayr is 0) and COP2 is known to
+	be usable (jit_check_cop2), so the interpreter's cases reduce to these.
+	Moves of the data registers that getcp2dr/setcp2dr only store are
+	native code; the others, and the commands, call those functions.
+*/
+#define JCP2DR( n )		JMEM( offsetof( mips_cpu_context, cp2dr ) + ( n ) * sizeof( PAIR ) )
+#define JCP2CR( n )		JMEM( offsetof( mips_cpu_context, cp2cr ) + ( n ) * sizeof( PAIR ) )
+
+static void SLJIT_FUNC jit_gte_mfc2( sljit_u32 op )
+{
+	UINT32 v = getcp2dr( INS_RD( op ) );
+	if( INS_RT( op ) != 0 )
+	{
+		mipscpu.r[ INS_RT( op ) ] = v;
+	}
+}
+
+static void SLJIT_FUNC jit_gte_mtc2( sljit_u32 op )
+{
+	setcp2dr( INS_RD( op ), mipscpu.r[ INS_RT( op ) ] );
+}
+
+static void SLJIT_FUNC jit_gte_cmd( sljit_u32 op )
+{
+	docop2( INS_COFUN( op ) );
+}
+
+static void SLJIT_FUNC jit_gte_lwc2( sljit_u32 op, sljit_up host )
+{
+	setcp2dr( INS_RT( op ), *(UINT32 *)host );
+}
+
+static void SLJIT_FUNC jit_gte_swc2( sljit_u32 op, sljit_up host )
+{
+	*(UINT32 *)host = getcp2dr( INS_RT( op ) );
+}
+
+/* getcp2dr / setcp2dr do more than read / store this data register */
+static int jit_gte_dr_special_get( int n )
+{
+	return n == 1 || n == 3 || n == 5 || ( n >= 8 && n <= 11 ) || ( n >= 17 && n <= 19 ) || n == 29;
+}
+static int jit_gte_dr_special_set( int n )
+{
+	return n == 15 || n == 28 || n == 30;
+}
+
+static void jit_emit_call1( struct sljit_compiler *C, UINT32 op, void *fn )
+{
+	sljit_emit_op1( C, SLJIT_MOV32, SLJIT_R0, 0, SLJIT_IMM, (sljit_s32)op );
+	sljit_emit_icall( C, SLJIT_CALL, SLJIT_ARGS1V( 32 ), SLJIT_IMM, SLJIT_FUNC_ADDR( fn ) );
+}
+
+/*
+	A GTE instruction, or one of the other helpers (jit_emit_helper).
+	'host' holds the checked fast RAM address of LWC2/SWC2.
+*/
+static void jit_emit_helper_op( struct sljit_compiler *C, UINT32 op, sljit_s32 host )
+{
+	int rt = INS_RT( op ), rd = INS_RD( op );
+
+	if( INS_OP( op ) == OP_COP2 )
+	{
+		switch( INS_RS( op ) )
+		{
+		case RS_MFC:
+			if( jit_gte_dr_special_get( rd ) )
+			{
+				jit_emit_call1( C, op, (void *)jit_gte_mfc2 );
+			}
+			else if( rt )
+			{
+				sljit_emit_op1( C, SLJIT_MOV32, SLJIT_R0, 0, JCP2DR( rd ) );
+				sljit_emit_op1( C, SLJIT_MOV32, JREG( rt ), SLJIT_R0, 0 );
+			}
+			return;
+		case RS_CFC:
+			if( rt )
+			{
+				sljit_emit_op1( C, SLJIT_MOV32, SLJIT_R0, 0, JCP2CR( rd ) );
+				sljit_emit_op1( C, SLJIT_MOV32, JREG( rt ), SLJIT_R0, 0 );
+			}
+			return;
+		case RS_MTC:
+			if( jit_gte_dr_special_set( rd ) )
+			{
+				jit_emit_call1( C, op, (void *)jit_gte_mtc2 );
+			}
+			else
+			{
+				sljit_emit_op1( C, SLJIT_MOV32, SLJIT_R0, 0, JREG( rt ) );
+				sljit_emit_op1( C, SLJIT_MOV32, JCP2DR( rd ), SLJIT_R0, 0 );
+			}
+			return;
+		case RS_CTC:
+			sljit_emit_op1( C, SLJIT_MOV32, SLJIT_R0, 0, JREG( rt ) );
+			sljit_emit_op1( C, SLJIT_MOV32, JCP2CR( rd ), SLJIT_R0, 0 );
+			return;
+		default:
+			if( INS_RS( op ) >= 16 && INS_CO( op ) == 1 )
+			{
+				jit_emit_call1( C, op, (void *)jit_gte_cmd );
+				return;
+			}
+			break;
+		}
+	}
+	else if( INS_OP( op ) == OP_LWC2 || INS_OP( op ) == OP_SWC2 )
+	{
+		if( host != SLJIT_R1 )
+		{
+			sljit_emit_op1( C, SLJIT_MOV_P, SLJIT_R1, 0, host, 0 );
+		}
+		sljit_emit_op1( C, SLJIT_MOV32, SLJIT_R0, 0, SLJIT_IMM, (sljit_s32)op );
+		if( INS_OP( op ) == OP_LWC2 )
+			sljit_emit_icall( C, SLJIT_CALL, SLJIT_ARGS2V( 32, P ), SLJIT_IMM, SLJIT_FUNC_ADDR( jit_gte_lwc2 ) );
+		else
+			sljit_emit_icall( C, SLJIT_CALL, SLJIT_ARGS2V( 32, P ), SLJIT_IMM, SLJIT_FUNC_ADDR( jit_gte_swc2 ) );
+		return;
+	}
+	jit_emit_helper( C, op );
 }
 
 
@@ -876,7 +1008,7 @@ static void jit_emit_slot( struct jit_ctx *ctx, UINT32 slot, const struct jit_op
 #ifdef PSXJIT_VERIFY
 		if( s->store ) jit_emit_verify_log( C, SLJIT_S2, 4 );
 #endif
-		jit_emit_helper( C, slot );
+		jit_emit_helper_op( C, slot, SLJIT_S2 );
 		break;
 	default:
 		if( s->trap )
@@ -1013,10 +1145,10 @@ static void jit_emit_one( struct jit_ctx *ctx, UINT32 op, UINT32 index )
 #ifdef PSXJIT_VERIFY
 		if( o.store ) jit_emit_verify_log( ctx->C, SLJIT_R1, 4 );
 #endif
-		jit_emit_helper( ctx->C, op );
+		jit_emit_helper_op( ctx->C, op, SLJIT_R1 );
 		break;
 	case JIT_HELPER:
-		jit_emit_helper( ctx->C, op );
+		jit_emit_helper_op( ctx->C, op, 0 );
 		break;
 	default:
 		jit_emit_simple( ctx, op, index );
@@ -1073,6 +1205,7 @@ static void jit_compile( struct jit_block *block, UINT32 pc )
 {
 	static struct jit_ctx ctx;
 	static UINT8 kind[ JIT_MAX_BLOCK ];		/* 0 one, 1 branch */
+	static UINT8 loopskip[ JIT_MAX_BLOCK ];	/* instruction n is the head of a wait loop */
 	static UINT32 ops[ JIT_MAX_BLOCK + 1 ];
 	struct psx_fastram *region;
 	struct sljit_compiler *C;
@@ -1175,6 +1308,25 @@ static void jit_compile( struct jit_block *block, UINT32 pc )
 		}
 	}
 
+	/* wait loop heads: block start or jump targets, not right after a load */
+	memset( loopskip, 0, sizeof( loopskip ) );
+	for( i = 0; i < count; i++ )
+	{
+		if( ctx.target[ i ] && loop_kind( pc + i * 4 ) != LOOP_NONE )
+		{
+			struct jit_op prev;
+			if( i > 0 )
+			{
+				jit_decode( ops[ i - 1 ], &prev );
+				if( prev.kind == JIT_MEM || prev.kind == JIT_HELPER_MEM )
+				{
+					continue;
+				}
+			}
+			loopskip[ i ] = 1;
+		}
+	}
+
 	C = sljit_create_compiler( NULL );
 	if( !C )
 	{
@@ -1199,6 +1351,16 @@ static void jit_compile( struct jit_block *block, UINT32 pc )
 			jit_emit_cycles_to( &ctx, i );
 			ctx.acct = i;
 			ctx.label[ i ] = sljit_emit_label( C );
+
+			/* the head of a wait loop (psxloop.c): skip the passes that fit, */
+			/* then go on only if the rest of the block still fits */
+			if( loopskip[ i ] )
+			{
+				sljit_emit_op1( C, SLJIT_MOV32, SLJIT_R0, 0, SLJIT_IMM, (sljit_sw)( pc + i * 4 ) );
+				sljit_emit_icall( C, SLJIT_CALL, SLJIT_ARGS1V( 32 ), SLJIT_IMM, SLJIT_FUNC_ADDR( loop_skip_helper ) );
+				jit_add_exit( &ctx, sljit_emit_cmp( C, SLJIT_SIG_LESS | SLJIT_32,
+					SLJIT_MEM0(), (sljit_sw)&mips_ICount, SLJIT_IMM, count - i ), i );
+			}
 		}
 
 		if( kind[ i ] )
@@ -1429,6 +1591,7 @@ static INLINE int jit_run( void )
 		/* left before its first instruction: the interpreter runs it */
 		return 0;
 	}
+	loop_pure_armed = 0;	/* the interpreter's loop tracking (psxloop.c) saw none of this */
 	change_pc32ledw( mipscpu.pc );
 	return 1;
 }
