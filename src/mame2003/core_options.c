@@ -1344,6 +1344,17 @@ void set_content_flags(void)
       }
   }
 
+  /************ KILLER INSTINCT: MIPS III RECOMPILER ************/
+  /* only the Killer Instinct driver enables it (Seattle games do not), */
+  /* and the option means nothing where it is compiled out */
+#if (HAS_R4600)
+  {
+    extern int mips3_jit_available(void);
+    if (game_driver->source_file && strstr(game_driver->source_file, "kinst.c") && mips3_jit_available())
+      options.content_flags[CONTENT_MIPS_DYNAREC] = true;
+  }
+#endif
+
   /************ DRIVERS WITH MULTIPLE BIOS OPTIONS ************/
 #ifndef SPLIT_CORE
  {
