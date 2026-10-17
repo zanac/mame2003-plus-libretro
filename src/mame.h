@@ -179,6 +179,7 @@ enum /* used to index content-specific flags */
   CONTENT_CHEAT_INPUT_PORT,
   CONTENT_MIPS_DYNAREC,
   CONTENT_ADSP_DYNAREC,
+  CONTENT_PSX_GPU_THREAD,
   CONTENT_end,
 };
 
@@ -222,6 +223,7 @@ struct GameOptions
   bool     use_samples;	         /* 1 to enable external .wav samples */
   bool     mips_dynarec;	       /* 1 to let drivers enable the MIPS recompiler */
   bool     adsp_dynarec;	       /* 1 to let drivers enable the ADSP-2100 recompiler */
+  bool     psx_gpu_thread;	       /* 1 to let drivers draw the PSX GPU on a second thread */
   bool     use_alt_sound;	       /* 1 to enable alternate ost samples */
 
   float	   brightness;		       /* brightness of the display */
