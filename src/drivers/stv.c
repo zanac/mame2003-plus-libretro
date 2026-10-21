@@ -129,6 +129,10 @@ data32_t* stv_workram_h;
 static data32_t* stv_backupram;
 data32_t* stv_scu;
 static data32_t* ioga;
+/* the hopper of the medal games (MAME's ticket dispenser, hopper type) */
+static int stv_hopper, hopper_power, hopper_status;
+static int stv_critcrsh;	/* the hammer position on ports A and B */
+static void *hopper_timer;
 static data16_t* scsp_regs;
 
 /*SMPC stuff*/
@@ -2308,6 +2312,30 @@ static UINT8 port_sel,mux_data;
 #define HI_WORD_ACCESS (mem_mask & 0x00ff0000) == 0
 #define LO_WORD_ACCESS (mem_mask & 0x000000ff) == 0
 
+static void hopper_tick(int param)
+{
+	/* a medal out every 100ms while the motor runs, the last one ends after it stops */
+	hopper_status ^= 1;
+	if (hopper_power)
+		timer_adjust(hopper_timer, TIME_IN_MSEC(100), 0, 0);
+}
+
+static void hopper_motor_w(int state)
+{
+	if (state && !hopper_power)
+	{
+		hopper_power = 1;
+		hopper_status = 0;
+		timer_adjust(hopper_timer, TIME_IN_MSEC(100), 0, 0);
+	}
+	else if (!state && hopper_power)
+	{
+		if (!hopper_status)
+			timer_adjust(hopper_timer, TIME_NEVER, 0, 0);
+		hopper_power = 0;
+	}
+}
+
 READ32_HANDLER ( stv_io_r32 )
 {
 	static int i= -1;
@@ -2336,7 +2364,16 @@ READ32_HANDLER ( stv_io_r32 )
 				}
 			}
 			/*default: 	usrintf_showmessage("%02x PORT SEL",port_sel);*/
-			default: return (readinputport(2) << 16) | (readinputport(3));
+			default:
+				if (stv_critcrsh)
+				{
+					/* the hammer position, with the hit latch */
+					int hit = (readinputport(4) & 0x10) ? 0 : 4;
+					UINT8 x = (BITSWAP8(readinputport(10), 2,3,0,1,6,7,5,4) & 0xf3) | hit;
+					UINT8 y = (BITSWAP8(readinputport(11), 2,3,0,1,6,7,5,4) & 0xf3) | hit;
+					return 0xff00ff00 | (x << 16) | y;
+				}
+				return ((readinputport(2) | (stv_hopper && hopper_status ? 0x02 : 0)) << 16) | (readinputport(3));
 		}
 		case 1:
 		return (readinputport(4) << 16) | (ioga[1]);
@@ -2391,6 +2428,8 @@ WRITE32_HANDLER ( stv_io_w32 )
 			{
 				/*Why does the BIOS tests these as ACTIVE HIGH?A program bug?*/
 				ioga[1] = (data) & 0xff;
+				if (stv_hopper)
+					hopper_motor_w(data & 0x80);
 				coin_counter_w(0,~data & 0x01);
 				coin_counter_w(1,~data & 0x02);
 				coin_lockout_w(0,~data & 0x04);
@@ -3074,6 +3113,269 @@ INPUT_PORTS_START( stv )
 	#endif
 INPUT_PORTS_END
 
+/* Critter Crusher: the hammer hit and its position on the screen */
+INPUT_PORTS_START( critcrsh )
+	PORT_START
+	PORT_DIPNAME( 0x01, 0x01, "PDR1" )
+	PORT_DIPSETTING(    0x01, DEF_STR( Off ) )
+	PORT_DIPSETTING(    0x00, DEF_STR( On ) )
+	PORT_DIPNAME( 0x02, 0x02, DEF_STR( Unknown ) )
+	PORT_DIPSETTING(    0x02, DEF_STR( Off ) )
+	PORT_DIPSETTING(    0x00, DEF_STR( On ) )
+	PORT_DIPNAME( 0x04, 0x04, DEF_STR( Unknown ) )
+	PORT_DIPSETTING(    0x04, DEF_STR( Off ) )
+	PORT_DIPSETTING(    0x00, DEF_STR( On ) )
+	PORT_DIPNAME( 0x08, 0x08, DEF_STR( Unknown ) )
+	PORT_DIPSETTING(    0x08, DEF_STR( Off ) )
+	PORT_DIPSETTING(    0x00, DEF_STR( On ) )
+	PORT_DIPNAME( 0x10, 0x10, DEF_STR( Unknown ) )
+	PORT_DIPSETTING(    0x10, DEF_STR( Off ) )
+	PORT_DIPSETTING(    0x00, DEF_STR( On ) )
+	PORT_DIPNAME( 0x20, 0x20, DEF_STR( Unknown ) )
+	PORT_DIPSETTING(    0x20, DEF_STR( Off ) )
+	PORT_DIPSETTING(    0x00, DEF_STR( On ) )
+	PORT_DIPNAME( 0x40, 0x40, DEF_STR( Unknown ) )
+	PORT_DIPSETTING(    0x40, DEF_STR( Off ) )
+	PORT_DIPSETTING(    0x00, DEF_STR( On ) )
+	PORT_DIPNAME( 0x80, 0x80, DEF_STR( Unknown ) )
+	PORT_DIPSETTING(    0x80, DEF_STR( Off ) )
+	PORT_DIPSETTING(    0x00, DEF_STR( On ) )
+
+	PORT_START
+	PORT_DIPNAME( 0x01, 0x01, "PDR2" )
+	PORT_DIPSETTING(    0x01, DEF_STR( Off ) )
+	PORT_DIPSETTING(    0x00, DEF_STR( On ) )
+	PORT_DIPNAME( 0x02, 0x02, DEF_STR( Unknown ) )
+	PORT_DIPSETTING(    0x02, DEF_STR( Off ) )
+	PORT_DIPSETTING(    0x00, DEF_STR( On ) )
+	PORT_DIPNAME( 0x04, 0x04, DEF_STR( Unknown ) )
+	PORT_DIPSETTING(    0x04, DEF_STR( Off ) )
+	PORT_DIPSETTING(    0x00, DEF_STR( On ) )
+	PORT_DIPNAME( 0x08, 0x08, DEF_STR( Unknown ) )
+	PORT_DIPSETTING(    0x08, DEF_STR( Off ) )
+	PORT_DIPSETTING(    0x00, DEF_STR( On ) )
+	PORT_DIPNAME( 0x10, 0x10, DEF_STR( Unknown ) )
+	PORT_DIPSETTING(    0x10, DEF_STR( Off ) )
+	PORT_DIPSETTING(    0x00, DEF_STR( On ) )
+	PORT_DIPNAME( 0x20, 0x20, DEF_STR( Unknown ) )
+	PORT_DIPSETTING(    0x20, DEF_STR( Off ) )
+	PORT_DIPSETTING(    0x00, DEF_STR( On ) )
+	PORT_DIPNAME( 0x40, 0x40, DEF_STR( Unknown ) )
+	PORT_DIPSETTING(    0x40, DEF_STR( Off ) )
+	PORT_DIPSETTING(    0x00, DEF_STR( On ) )
+	PORT_DIPNAME( 0x80, 0x80, DEF_STR( Unknown ) )
+	PORT_DIPSETTING(    0x80, DEF_STR( Off ) )
+	PORT_DIPSETTING(    0x00, DEF_STR( On ) )
+
+	PORT_START	/* port A: the hammer X */
+	PORT_BIT( 0xff, IP_ACTIVE_LOW, IPT_UNUSED )
+
+	PORT_START	/* port B: the hammer Y */
+	PORT_BIT( 0xff, IP_ACTIVE_LOW, IPT_UNUSED )
+/*
+	PORT_START
+	STV_PLAYER_INPUTS(3, BUTTON1, BUTTON2, BUTTON3, BUTTON4)
+
+	PORT_START
+	STV_PLAYER_INPUTS(4, BUTTON1, BUTTON2, BUTTON3, BUTTON4)
+*/
+
+	PORT_START
+	PORT_BIT( 0x01, IP_ACTIVE_LOW, IPT_COIN1 )
+	PORT_BIT( 0x02, IP_ACTIVE_LOW, IPT_COIN2 )
+	PORT_BITX(0x04, IP_ACTIVE_LOW, IPT_SERVICE, "Test", KEYCODE_F2, IP_JOY_NONE )
+	PORT_BIT( 0x08, IP_ACTIVE_LOW, IPT_SERVICE1 )
+	PORT_BIT( 0x10, IP_ACTIVE_LOW, IPT_BUTTON1 )	/* hammer hit */
+	PORT_BIT( 0x20, IP_ACTIVE_LOW, IPT_UNUSED )
+	PORT_BITX(0x40, IP_ACTIVE_LOW, IPT_SERVICE, "1P Push Switch", KEYCODE_7, IP_JOY_NONE )
+	PORT_BITX(0x80, IP_ACTIVE_LOW, IPT_SERVICE, "2P Push Switch", KEYCODE_8, IP_JOY_NONE )
+
+	/*This *might* be unused...*/
+	PORT_START
+	PORT_BIT ( 0xff, IP_ACTIVE_LOW, IPT_UNUSED )
+
+	/*Extra button layout,used by Power Instinct 3 & Suikoenbu*/
+	PORT_START
+	PORT_BIT( 0x01, IP_ACTIVE_LOW, IPT_BUTTON4  | IPF_PLAYER1 )
+	PORT_BIT( 0x02, IP_ACTIVE_LOW, IPT_BUTTON5  | IPF_PLAYER1 )
+	PORT_BIT( 0x04, IP_ACTIVE_LOW, IPT_BUTTON6  | IPF_PLAYER1 )
+	PORT_BIT( 0x08, IP_ACTIVE_LOW, IPT_UNUSED )
+	PORT_BIT( 0x10, IP_ACTIVE_LOW, IPT_BUTTON4  | IPF_PLAYER2 )
+	PORT_BIT( 0x20, IP_ACTIVE_LOW, IPT_BUTTON5  | IPF_PLAYER2 )
+	PORT_BIT( 0x40, IP_ACTIVE_LOW, IPT_BUTTON6  | IPF_PLAYER2 )
+	PORT_BIT( 0x80, IP_ACTIVE_LOW, IPT_UNUSED )
+
+	/*We don't need these,AFAIK the country code doesn't work either...*/
+	#if 0
+	PORT_START							/*7*/
+	PORT_DIPNAME( 0x0f, 0x01, "Country" )
+	PORT_DIPSETTING(    0x01, "Japan" )
+	PORT_DIPSETTING(    0x02, "Asia Ntsc" )
+	PORT_DIPSETTING(    0x04, "Usa" )
+	PORT_DIPSETTING(    0x08, "Sud America Ntsc" )
+	PORT_DIPSETTING(    0x06, "Korea" )
+	PORT_DIPSETTING(    0x0a, "Asia Pal" )
+	PORT_DIPSETTING(    0x0c, "Europe/Other Pal" )
+	PORT_DIPSETTING(    0x0d, "Sud America Pal" )
+
+	PORT_START	/* Pad data 1a */
+	PORT_BITX(0x01, IP_ACTIVE_HIGH, 0, "B",   KEYCODE_U, IP_JOY_NONE )
+	PORT_BITX(0x02, IP_ACTIVE_HIGH, 0, "C",   KEYCODE_Y, IP_JOY_NONE )
+	PORT_BITX(0x04, IP_ACTIVE_HIGH, 0, "A", KEYCODE_T, IP_JOY_NONE )
+	PORT_BITX(0x08, IP_ACTIVE_HIGH, 0, "Start", KEYCODE_O, IP_JOY_NONE )
+	PORT_BITX(0x10, IP_ACTIVE_HIGH, 0, "Up", KEYCODE_I, IP_JOY_NONE )
+	PORT_BITX(0x20, IP_ACTIVE_HIGH, 0, "Down",   KEYCODE_K, IP_JOY_NONE )
+	PORT_BITX(0x40, IP_ACTIVE_HIGH, 0, "Left", KEYCODE_J, IP_JOY_NONE )
+	PORT_BITX(0x80, IP_ACTIVE_HIGH, 0, "Right", KEYCODE_L, IP_JOY_NONE )
+
+	PORT_START	/* Pad data 1b */
+	PORT_BITX(0x08, IP_ACTIVE_HIGH, 0, "L trig", KEYCODE_A, IP_JOY_NONE )
+	PORT_BITX(0x10, IP_ACTIVE_HIGH, 0, "Z", KEYCODE_Q, IP_JOY_NONE )
+	PORT_BITX(0x20, IP_ACTIVE_HIGH, 0, "Y",   KEYCODE_W, IP_JOY_NONE )
+	PORT_BITX(0x40, IP_ACTIVE_HIGH, 0, "X", KEYCODE_E, IP_JOY_NONE )
+	PORT_BITX(0x80, IP_ACTIVE_HIGH, 0, "R trig", KEYCODE_S, IP_JOY_NONE )
+	#endif
+
+	PORT_START	/* the hammer X */
+	PORT_ANALOG( 0x3f, 0x00, IPT_LIGHTGUN_X, 50, 1, 0, 0x3f )
+
+	PORT_START	/* the hammer Y */
+	PORT_ANALOG( 0x3f, 0x02, IPT_LIGHTGUN_Y, 50, 1, 0x02, 0x2e )
+INPUT_PORTS_END
+
+/* the medal games (MAME's patocar and micrombc inputs), with a hopper */
+INPUT_PORTS_START( stvmedal )
+	PORT_START
+	PORT_DIPNAME( 0x01, 0x01, "PDR1" )
+	PORT_DIPSETTING(    0x01, DEF_STR( Off ) )
+	PORT_DIPSETTING(    0x00, DEF_STR( On ) )
+	PORT_DIPNAME( 0x02, 0x02, DEF_STR( Unknown ) )
+	PORT_DIPSETTING(    0x02, DEF_STR( Off ) )
+	PORT_DIPSETTING(    0x00, DEF_STR( On ) )
+	PORT_DIPNAME( 0x04, 0x04, DEF_STR( Unknown ) )
+	PORT_DIPSETTING(    0x04, DEF_STR( Off ) )
+	PORT_DIPSETTING(    0x00, DEF_STR( On ) )
+	PORT_DIPNAME( 0x08, 0x08, DEF_STR( Unknown ) )
+	PORT_DIPSETTING(    0x08, DEF_STR( Off ) )
+	PORT_DIPSETTING(    0x00, DEF_STR( On ) )
+	PORT_DIPNAME( 0x10, 0x10, DEF_STR( Unknown ) )
+	PORT_DIPSETTING(    0x10, DEF_STR( Off ) )
+	PORT_DIPSETTING(    0x00, DEF_STR( On ) )
+	PORT_DIPNAME( 0x20, 0x20, DEF_STR( Unknown ) )
+	PORT_DIPSETTING(    0x20, DEF_STR( Off ) )
+	PORT_DIPSETTING(    0x00, DEF_STR( On ) )
+	PORT_DIPNAME( 0x40, 0x40, DEF_STR( Unknown ) )
+	PORT_DIPSETTING(    0x40, DEF_STR( Off ) )
+	PORT_DIPSETTING(    0x00, DEF_STR( On ) )
+	PORT_DIPNAME( 0x80, 0x80, DEF_STR( Unknown ) )
+	PORT_DIPSETTING(    0x80, DEF_STR( Off ) )
+	PORT_DIPSETTING(    0x00, DEF_STR( On ) )
+
+	PORT_START
+	PORT_DIPNAME( 0x01, 0x01, "PDR2" )
+	PORT_DIPSETTING(    0x01, DEF_STR( Off ) )
+	PORT_DIPSETTING(    0x00, DEF_STR( On ) )
+	PORT_DIPNAME( 0x02, 0x02, DEF_STR( Unknown ) )
+	PORT_DIPSETTING(    0x02, DEF_STR( Off ) )
+	PORT_DIPSETTING(    0x00, DEF_STR( On ) )
+	PORT_DIPNAME( 0x04, 0x04, DEF_STR( Unknown ) )
+	PORT_DIPSETTING(    0x04, DEF_STR( Off ) )
+	PORT_DIPSETTING(    0x00, DEF_STR( On ) )
+	PORT_DIPNAME( 0x08, 0x08, DEF_STR( Unknown ) )
+	PORT_DIPSETTING(    0x08, DEF_STR( Off ) )
+	PORT_DIPSETTING(    0x00, DEF_STR( On ) )
+	PORT_DIPNAME( 0x10, 0x10, DEF_STR( Unknown ) )
+	PORT_DIPSETTING(    0x10, DEF_STR( Off ) )
+	PORT_DIPSETTING(    0x00, DEF_STR( On ) )
+	PORT_DIPNAME( 0x20, 0x20, DEF_STR( Unknown ) )
+	PORT_DIPSETTING(    0x20, DEF_STR( Off ) )
+	PORT_DIPSETTING(    0x00, DEF_STR( On ) )
+	PORT_DIPNAME( 0x40, 0x40, DEF_STR( Unknown ) )
+	PORT_DIPSETTING(    0x40, DEF_STR( Off ) )
+	PORT_DIPSETTING(    0x00, DEF_STR( On ) )
+	PORT_DIPNAME( 0x80, 0x80, DEF_STR( Unknown ) )
+	PORT_DIPSETTING(    0x80, DEF_STR( Off ) )
+	PORT_DIPSETTING(    0x00, DEF_STR( On ) )
+
+	PORT_START	/* port A */
+	PORT_BIT( 0x01, IP_ACTIVE_HIGH, IPT_BUTTON2 )
+	PORT_BIT( 0x02, IP_ACTIVE_HIGH, IPT_SPECIAL )	/* the hopper */
+	PORT_BIT( 0x1c, IP_ACTIVE_LOW,  IPT_UNUSED )
+	PORT_BIT( 0x20, IP_ACTIVE_LOW,  IPT_BUTTON1 )	/* power button (micrombc) */
+	PORT_BIT( 0xc0, IP_ACTIVE_LOW,  IPT_UNUSED )
+
+	PORT_START	/* port B */
+	PORT_BIT( 0x01, IP_ACTIVE_LOW,  IPT_BUTTON3 )
+	PORT_BIT( 0x02, IP_ACTIVE_HIGH, IPT_BUTTON4 )	/* door switch? */
+	PORT_BIT( 0x0c, IP_ACTIVE_LOW,  IPT_BUTTON5 )	/* magnet sensor (micrombc) */
+	PORT_BIT( 0x10, IP_ACTIVE_LOW,  IPT_UNUSED )
+	PORT_BIT( 0x20, IP_ACTIVE_LOW,  IPT_COIN3 )	/* medal */
+	PORT_BIT( 0xc0, IP_ACTIVE_LOW,  IPT_UNUSED )
+/*
+	PORT_START
+	STV_PLAYER_INPUTS(3, BUTTON1, BUTTON2, BUTTON3, BUTTON4)
+
+	PORT_START
+	STV_PLAYER_INPUTS(4, BUTTON1, BUTTON2, BUTTON3, BUTTON4)
+*/
+
+	PORT_START
+	PORT_BIT( 0x01, IP_ACTIVE_LOW, IPT_COIN1 )
+	PORT_BIT( 0x02, IP_ACTIVE_LOW, IPT_COIN2 )
+	PORT_BITX(0x04, IP_ACTIVE_LOW, IPT_SERVICE, "Test", KEYCODE_F2, IP_JOY_NONE )
+	PORT_BIT( 0x08, IP_ACTIVE_LOW, IPT_SERVICE1 )
+	PORT_BIT( 0x10, IP_ACTIVE_LOW, IPT_START1 )
+	PORT_BIT( 0x20, IP_ACTIVE_LOW, IPT_START2 )
+	PORT_BITX(0x40, IP_ACTIVE_LOW, IPT_SERVICE, "1P Push Switch", KEYCODE_7, IP_JOY_NONE )
+	PORT_BITX(0x80, IP_ACTIVE_LOW, IPT_SERVICE, "2P Push Switch", KEYCODE_8, IP_JOY_NONE )
+
+	/*This *might* be unused...*/
+	PORT_START
+	PORT_BIT ( 0xff, IP_ACTIVE_LOW, IPT_UNUSED )
+
+	/*Extra button layout,used by Power Instinct 3 & Suikoenbu*/
+	PORT_START
+	PORT_BIT( 0x01, IP_ACTIVE_LOW, IPT_BUTTON4  | IPF_PLAYER1 )
+	PORT_BIT( 0x02, IP_ACTIVE_LOW, IPT_BUTTON5  | IPF_PLAYER1 )
+	PORT_BIT( 0x04, IP_ACTIVE_LOW, IPT_BUTTON6  | IPF_PLAYER1 )
+	PORT_BIT( 0x08, IP_ACTIVE_LOW, IPT_UNUSED )
+	PORT_BIT( 0x10, IP_ACTIVE_LOW, IPT_BUTTON4  | IPF_PLAYER2 )
+	PORT_BIT( 0x20, IP_ACTIVE_LOW, IPT_BUTTON5  | IPF_PLAYER2 )
+	PORT_BIT( 0x40, IP_ACTIVE_LOW, IPT_BUTTON6  | IPF_PLAYER2 )
+	PORT_BIT( 0x80, IP_ACTIVE_LOW, IPT_UNUSED )
+
+	/*We don't need these,AFAIK the country code doesn't work either...*/
+	#if 0
+	PORT_START							/*7*/
+	PORT_DIPNAME( 0x0f, 0x01, "Country" )
+	PORT_DIPSETTING(    0x01, "Japan" )
+	PORT_DIPSETTING(    0x02, "Asia Ntsc" )
+	PORT_DIPSETTING(    0x04, "Usa" )
+	PORT_DIPSETTING(    0x08, "Sud America Ntsc" )
+	PORT_DIPSETTING(    0x06, "Korea" )
+	PORT_DIPSETTING(    0x0a, "Asia Pal" )
+	PORT_DIPSETTING(    0x0c, "Europe/Other Pal" )
+	PORT_DIPSETTING(    0x0d, "Sud America Pal" )
+
+	PORT_START	/* Pad data 1a */
+	PORT_BITX(0x01, IP_ACTIVE_HIGH, 0, "B",   KEYCODE_U, IP_JOY_NONE )
+	PORT_BITX(0x02, IP_ACTIVE_HIGH, 0, "C",   KEYCODE_Y, IP_JOY_NONE )
+	PORT_BITX(0x04, IP_ACTIVE_HIGH, 0, "A", KEYCODE_T, IP_JOY_NONE )
+	PORT_BITX(0x08, IP_ACTIVE_HIGH, 0, "Start", KEYCODE_O, IP_JOY_NONE )
+	PORT_BITX(0x10, IP_ACTIVE_HIGH, 0, "Up", KEYCODE_I, IP_JOY_NONE )
+	PORT_BITX(0x20, IP_ACTIVE_HIGH, 0, "Down",   KEYCODE_K, IP_JOY_NONE )
+	PORT_BITX(0x40, IP_ACTIVE_HIGH, 0, "Left", KEYCODE_J, IP_JOY_NONE )
+	PORT_BITX(0x80, IP_ACTIVE_HIGH, 0, "Right", KEYCODE_L, IP_JOY_NONE )
+
+	PORT_START	/* Pad data 1b */
+	PORT_BITX(0x08, IP_ACTIVE_HIGH, 0, "L trig", KEYCODE_A, IP_JOY_NONE )
+	PORT_BITX(0x10, IP_ACTIVE_HIGH, 0, "Z", KEYCODE_Q, IP_JOY_NONE )
+	PORT_BITX(0x20, IP_ACTIVE_HIGH, 0, "Y",   KEYCODE_W, IP_JOY_NONE )
+	PORT_BITX(0x40, IP_ACTIVE_HIGH, 0, "X", KEYCODE_E, IP_JOY_NONE )
+	PORT_BITX(0x80, IP_ACTIVE_HIGH, 0, "R trig", KEYCODE_S, IP_JOY_NONE )
+	#endif
+INPUT_PORTS_END
+
 /*Same as the regular one,but with an additional & optional mahjong panel*/
 INPUT_PORTS_START( stvmp )
 	PORT_START
@@ -3304,6 +3606,10 @@ DRIVER_INIT ( stv )
 	today = localtime(&ltime);
 
 	cpu_setbank(1,&ROM[0x000000]);
+	stv_hopper = 0;
+	stv_critcrsh = 0;
+	hopper_timer = NULL;
+	scu_dma_timer[0] = scu_dma_timer[1] = scu_dma_timer[2] = NULL;
 
 	/* we allocate the memory here so its easier to share between cpus */
 	smpc_ram = auto_malloc (0x80);
@@ -3371,6 +3677,10 @@ MACHINE_INIT( stv )
 		}
 		stv_scu[31] = 0;	/* no DMA moving */
 	}
+	if (!hopper_timer)
+		hopper_timer = timer_alloc(hopper_tick);
+	timer_adjust(hopper_timer, TIME_NEVER, 0, 0);
+	hopper_power = hopper_status = 0;
 	scu_timer0_count = 0;
 	slave_irl = 0;
 	cpu_set_irq_callback(0, stv_master_irq_callback);
@@ -3988,7 +4298,7 @@ ROM_START( thunt )
 	ROM_LOAD16_WORD_SWAP( "th-e-5.ic5",   0x1000000, 0x0400000, CRC(3914b805) SHA1(1331ce82ba0bdfc76fe3456a5252e69c00e2cf1f) )
 ROM_END
 
-ROM_START( sassisu )
+ROM_START( sasissu )
 	STV_BIOS
 
 	ROM_REGION32_BE( 0x1c00000, REGION_USER1, ROMREGION_ERASEFF )
@@ -4416,6 +4726,39 @@ static DRIVER_INIT( ffreveng ) { init_stv();  stv_install_common_protection(0x05
 static DRIVER_INIT( elandore ) { init_stv();  stv_install_common_protection(0x05226d41); }
 static DRIVER_INIT( astrass )  { init_ic13(); stv_install_common_protection(0x052e2901); }
 static DRIVER_INIT( sss )      { init_ic13(); stv_install_common_protection(0x052b6901); }
+/* the data of the Korean version is bit-swapped and inverted */
+static DRIVER_INIT( sanjeon )
+{
+	UINT8 *src = memory_region(REGION_USER1);
+	int len = memory_region_length(REGION_USER1);
+	int x;
+
+	for (x = 0; x < len; x++)
+	{
+		UINT8 v = src[x] ^ 0xff;
+		v = BITSWAP8(v, 7,2,5,1, 3,6,4,0);
+		v = BITSWAP8(v, 4,6,5,7, 3,2,1,0);
+		v = BITSWAP8(v, 7,6,5,4, 2,3,1,0);
+		v = BITSWAP8(v, 7,0,5,4, 3,2,1,6);
+		v = BITSWAP8(v, 3,6,5,4, 7,2,1,0);
+		src[x] = v;
+	}
+
+	init_ic13();
+}
+
+static DRIVER_INIT( critcrsh )
+{
+	init_ic13();
+	stv_critcrsh = 1;
+}
+
+static DRIVER_INIT( stvmedal )
+{
+	init_ic13();
+	stv_hopper = 1;
+}
+
 static DRIVER_INIT( twcup98 )  { init_ic13(); stv_install_common_protection(0x05200913); }
 
 DRIVER_INIT( sfish2 )
@@ -4441,6 +4784,161 @@ DRIVER_INIT( sfish2j )
 	init_stv();
 }
 
+
+ROM_START( critcrsh ) /* must use the Europe BIOS */
+	STV_BIOS
+
+	ROM_REGION32_BE( 0x2400000, REGION_USER1, ROMREGION_ERASEFF )
+	ROM_LOAD16_BYTE( "epr-18821.ic13",  0x0000001, 0x0080000, CRC(9a6658e2) SHA1(16dbae3d9ab584713afcb403f89fe71049609245) )
+	ROM_RELOAD ( 0x0100001, 0x0080000 )
+	ROM_RELOAD_PLAIN( 0x0200000, 0x0080000 )
+	ROM_RELOAD_PLAIN( 0x0300000, 0x0080000 )
+	ROM_LOAD16_WORD_SWAP( "mpr-18789.ic8", 0x1c00000, 0x0400000, CRC(b388616f) SHA1(0b2c5a547c3a6a8fb9f4ca54336cf6dc9adb8c6a) ) /* good */
+	ROM_LOAD16_WORD_SWAP( "mpr-18788.ic9", 0x2000000, 0x0400000, CRC(feae5867) SHA1(7d2e47d5ab18700a246d53fdb7872a905cdac55a) ) /* good */
+
+	ROM_REGION( 0x80, REGION_USER3, 0 ) /* preconfigured to 1 player */
+	ROM_LOAD( "critcrsh.nv", 0x0000, 0x0080, CRC(3da9860e) SHA1(05b315aa71fcfc4e617266e1c5e4954eccbf7854) )
+ROM_END
+
+ROM_START( tatacot ) /* must use the Japan BIOS */
+	STV_BIOS
+
+	ROM_REGION32_BE( 0x2400000, REGION_USER1, ROMREGION_ERASEFF )
+	ROM_LOAD16_BYTE( "epr-18790.ic13",  0x0000001, 0x0080000, CRC(d95155dc) SHA1(b08b75d15aad073eecf8b04fd2d718366bb6f6bb) )
+	ROM_RELOAD ( 0x0100001, 0x0080000 )
+	ROM_RELOAD_PLAIN( 0x0200000, 0x0080000 )
+	ROM_RELOAD_PLAIN( 0x0300000, 0x0080000 )
+	ROM_LOAD16_WORD_SWAP( "mpr-18789.ic8", 0x1c00000, 0x0400000, CRC(b388616f) SHA1(0b2c5a547c3a6a8fb9f4ca54336cf6dc9adb8c6a) ) /* good */
+	ROM_LOAD16_WORD_SWAP( "mpr-18788.ic9", 0x2000000, 0x0400000, CRC(feae5867) SHA1(7d2e47d5ab18700a246d53fdb7872a905cdac55a) ) /* good */
+
+	ROM_REGION( 0x80, REGION_USER3, 0 ) /* preconfigured to 1 player */
+	ROM_LOAD( "critcrsh.nv", 0x0000, 0x0080, CRC(3da9860e) SHA1(05b315aa71fcfc4e617266e1c5e4954eccbf7854) )
+ROM_END
+
+ROM_START( danchiq )
+	STV_BIOS
+
+	ROM_REGION32_BE( 0x1600000, REGION_USER1, ROMREGION_ERASEFF )
+	ROM_LOAD16_WORD_SWAP( "ic22",    0x0200000, 0x0200000, CRC(e216bfc8) SHA1(7a08fa32281e272dbf5e7daea50a1800cc225c1b) )/*ic 7 */
+	ROM_LOAD16_WORD_SWAP( "ic24",    0x0400000, 0x0200000, CRC(b95aa5ac) SHA1(2766c5414643034a0f6d746050557516bd3753df) )/*ic 2 */
+	ROM_LOAD16_WORD_SWAP( "ic26",    0x0600000, 0x0200000, CRC(df6ebd48) SHA1(fcccafbee1b8b952b07ed0e7e86219eed9cf4a93) )
+	ROM_LOAD16_WORD_SWAP( "ic28",    0x0800000, 0x0200000, CRC(cf6a2b76) SHA1(1f7522d446d57b78d099bae553133d5e7e54ff70) )/*ic 3 */
+	ROM_LOAD16_WORD_SWAP( "ic30",    0x0a00000, 0x0200000, CRC(0b6a9901) SHA1(b4c335199d3e49a9ae5d474b10130abc4718cdf9) )
+	ROM_LOAD16_WORD_SWAP( "ic32",    0x0c00000, 0x0200000, CRC(0b4604f5) SHA1(547cba4a80baf126e87f87529aa933587643d359) )/*ic 4 */
+	ROM_LOAD16_WORD_SWAP( "ic34",    0x0e00000, 0x0200000, CRC(616e20fa) SHA1(45c175e79b5701db9726d157ff92eee368f4bbf9) )
+	ROM_LOAD16_WORD_SWAP( "ic36",    0x1000000, 0x0200000, CRC(43474e08) SHA1(30b3ede287d5de93c6e0219bfd0a5d7ed5b6a958) )/*ic 5 */
+	ROM_LOAD16_WORD_SWAP( "ic23",    0x1200000, 0x0200000, CRC(d080eb71) SHA1(9c39b887697c8872f0cb655cff24282ad3b90e9b) )
+	ROM_LOAD16_WORD_SWAP( "ic25",    0x1400000, 0x0200000, CRC(9a4109e5) SHA1(ba59caac5f5a80fc52c507d8a47f322a380aa9a1) )/*(Untested) */
+ROM_END
+
+ROM_START( micrombc ) /* set to 1p */
+	STV_BIOS
+
+	ROM_REGION32_BE( 0x1400000, REGION_USER1, ROMREGION_ERASEFF )
+
+	ROM_LOAD16_WORD_SWAP( "ic22",    0x0200000, 0x0200000, CRC(8385bc45) SHA1(0bd60d7560cb2313d68470d0572850a7b8c501fd) ) /* OK */
+	ROM_LOAD16_WORD_SWAP( "ic24",    0x0400000, 0x0200000, CRC(84ecb42f) SHA1(005dee9a0912d4b1b7f5157bc3cde96548c1e348) ) /* OK */
+	ROM_LOAD16_WORD_SWAP( "ic26",    0x0600000, 0x0200000, CRC(869bc19c) SHA1(638125007d331beef567c976ea6f4e7a21acdb64) ) /* OK */
+	ROM_LOAD16_WORD_SWAP( "ic28",    0x0800000, 0x0200000, CRC(0c3db354) SHA1(c4d43da7cea1b4d5ca3ac545afde10344a4a385b) ) /* OK */
+	ROM_LOAD16_WORD_SWAP( "ic30",    0x0a00000, 0x0200000, CRC(03b9eacf) SHA1(d69c10f7613d9f52042dd6cce64e74e2b1ecc2d8) ) /* OK */
+	ROM_LOAD16_WORD_SWAP( "ic32",    0x0c00000, 0x0200000, CRC(62c10626) SHA1(58cb0ca0330fa7a62b277ab0ff84bff65b81bb23) ) /* OK */
+	ROM_LOAD16_WORD_SWAP( "ic34",    0x1000000, 0x0200000, CRC(8d89877e) SHA1(7d76d48d64d7ac5411d714a4bb83f37e3e5b8df6) ) /* 00 Fill. OK */
+	ROM_LOAD16_WORD_SWAP( "ic36",    0x1200000, 0x0200000, CRC(8d89877e) SHA1(7d76d48d64d7ac5411d714a4bb83f37e3e5b8df6) ) /* 00 Fill, OK */
+
+	ROM_REGION( 0x80, REGION_USER3, 0 ) /* preconfigured to 1 player */
+	ROM_LOAD( "micrombc.nv", 0x0000, 0x0080, CRC(6e89815f) SHA1(4478f614fb61859f4ee7bf55462f737387887e6f) )
+ROM_END
+
+ROM_START( patocar )
+	STV_BIOS
+
+	ROM_REGION32_BE( 0xc00000, REGION_USER1, ROMREGION_ERASEFF )
+	ROM_LOAD16_WORD_SWAP( "ic22.bin",     0x0200000, 0x200000, CRC(b7e6d425) SHA1(b7496cb390fe50ee786815082415427056e4e3e1) )
+	ROM_LOAD16_WORD_SWAP( "ic24.bin",     0x0400000, 0x200000, CRC(cbbb687e) SHA1(cfc87ae6124f9978bb2432b98d77f0da07d020b7) )
+	ROM_LOAD16_WORD_SWAP( "ic26.bin",     0x0600000, 0x200000, CRC(91db9dbe) SHA1(8652fe45ce56633016403c75e8b3a7b77f279819) )
+	ROM_LOAD16_WORD_SWAP( "ic28.bin",     0x0800000, 0x200000, CRC(bff0cd9c) SHA1(3c62aa2d7f71bd6fb147fdcd8d99cd7815f3047e) )
+	ROM_LOAD16_WORD_SWAP( "ic30.bin",     0x0a00000, 0x200000, CRC(9a4109e5) SHA1(ba59caac5f5a80fc52c507d8a47f322a380aa9a1) )   /* empty / FF filled */
+
+	ROM_REGION( 0x80, REGION_USER3, 0 ) /* preconfigured to 1 player */
+	ROM_LOAD( "patocar.nv", 0x0000, 0x0080, CRC(d9873ee8) SHA1(e74747816bba6745afd718b0beec67a884c6a31c) )
+ROM_END
+
+ROM_START( skychal )
+	STV_BIOS
+
+	ROM_REGION32_BE( 0xe00000, REGION_USER1, ROMREGION_ERASEFF )
+	ROM_LOAD16_WORD_SWAP( "ic22.bin",     0x0200000, 0x200000, CRC(a12ccf64) SHA1(eb3ff0cdc10fa17e40af5bddedfa5f758c7a5623) )
+	ROM_LOAD16_WORD_SWAP( "ic24.bin",     0x0400000, 0x200000, CRC(9a929dcf) SHA1(892e491fa33cc30cbbd24feb4ea6a63f9a9e1a62) )
+	ROM_LOAD16_WORD_SWAP( "ic26.bin",     0x0600000, 0x200000, CRC(ed2183d3) SHA1(7c43171a57e070a295c191408bd1b8ffee053d9b) )
+	ROM_LOAD16_WORD_SWAP( "ic28.bin",     0x0800000, 0x200000, CRC(e7401d68) SHA1(02f77439075b6367b46dc9ef7f67023b32a68526) )
+	ROM_LOAD16_WORD_SWAP( "ic30.bin",     0x0a00000, 0x200000, CRC(950f7a2f) SHA1(1b4fd7b08eeb2fdf2cdfae7f8aa3240e8dce3b9a) )
+	ROM_LOAD16_WORD_SWAP( "ic32.bin",     0x0c00000, 0x200000, CRC(a656212b) SHA1(b2bf325cb4cf67787c836a9ac1bb7231068ffd82) )
+
+	ROM_REGION( 0x80, REGION_USER3, 0 ) /* preconfigured to 1 player */
+	ROM_LOAD( "skychal.nv", 0x0000, 0x0080, CRC(a6515237) SHA1(5e50cc93eb60ed67cdca408b23b80d16a398df02) )
+ROM_END
+
+ROM_START( supgoal )
+	STV_BIOS
+
+	ROM_REGION32_BE( 0xc00000, REGION_USER1, ROMREGION_ERASEFF )
+	ROM_LOAD16_WORD_SWAP( "ic22.bin",     0x0200000, 0x200000, CRC(a686f7a2) SHA1(f4f9b63046d184864cfffe6ef8268a33b73298da) )
+	ROM_LOAD16_WORD_SWAP( "ic24.bin",     0x0400000, 0x200000, CRC(56fbbeea) SHA1(2c622ccc20aed0df7c611a00986ce76b84c61d70) )
+	ROM_LOAD16_WORD_SWAP( "ic26.bin",     0x0600000, 0x200000, CRC(64701c2b) SHA1(e9a426ce1882660d533b963899a8b1b6f41f85d4) )
+	ROM_LOAD16_WORD_SWAP( "ic28.bin",     0x0800000, 0x200000, CRC(d9aebe8c) SHA1(cd19cf1227d151a015c4dc3aed14bc3b2f78ce07) )
+	ROM_LOAD16_WORD_SWAP( "ic30.bin",     0x0a00000, 0x200000, CRC(26d4ade5) SHA1(6b958aa4db293c7af88a735323d19f6417d86048) )
+
+	ROM_REGION( 0x80, REGION_USER3, 0 ) /* preconfigured to 1 player */
+	ROM_LOAD( "supgoal.nv", 0x0000, 0x0080, CRC(63806aae) SHA1(b82f0995799e9259a1f071ea8b64a719f9e3c9e9) )
+ROM_END
+
+ROM_START( techbowl ) /* set to 1p */
+	STV_BIOS
+
+	ROM_REGION32_BE( 0xc00000, REGION_USER1, ROMREGION_ERASEFF )
+
+	ROM_LOAD16_WORD_SWAP( "ic22",    0x0200000, 0x0200000, CRC(5058db21) SHA1(eec908bbfb9ec0fdca0002e69f32c1c030086456) ) /* OK */
+	ROM_LOAD16_WORD_SWAP( "ic24",    0x0400000, 0x0200000, CRC(34090f6d) SHA1(b8bc344ab826d5c9584afb01dba1c720b8dbc74d) ) /* OK */
+	ROM_LOAD16_WORD_SWAP( "ic26",    0x0600000, 0x0200000, CRC(fb073352) SHA1(a5164aa5854ab3095f704ab73b6e4fb9ed0e0785) ) /* OK */
+	ROM_LOAD16_WORD_SWAP( "ic28",    0x0800000, 0x0200000, CRC(530e0ceb) SHA1(8d14eb9dbf253a4563587d256a15492384e7ca5c) ) /* OK */
+	ROM_LOAD16_WORD_SWAP( "ic30",    0x0a00000, 0x0200000, CRC(8d89877e) SHA1(7d76d48d64d7ac5411d714a4bb83f37e3e5b8df6) ) /* 00 Fill, OK */
+
+	ROM_REGION( 0x80, REGION_USER3, 0 ) /* preconfigured to 1 player */
+	ROM_LOAD( "techbowl.nv", 0x0000, 0x0080, CRC(5bebc2b7) SHA1(e189e891e1753059fbaad4ce82ddf191d5e8176a) )
+ROM_END
+
+ROM_START( wasafari )
+	STV_BIOS
+
+	ROM_REGION32_BE( 0xc00000, REGION_USER1, ROMREGION_ERASEFF )
+	ROM_LOAD16_WORD_SWAP( "ic22.bin",     0x0200000, 0x200000, CRC(d8bb2e2c) SHA1(e55714425f8dcf01e8cb68d67c96f19a9d6f4e3a) )
+	ROM_LOAD16_WORD_SWAP( "ic24.bin",     0x0400000, 0x200000, CRC(c1b0e173) SHA1(92e5fe1f9fa70182c5bf8f087686782714cf4416) )
+	ROM_LOAD16_WORD_SWAP( "ic26.bin",     0x0600000, 0x200000, CRC(a5c0577c) SHA1(b6e19001e67c8222af6802eae7b58be65d8ca9fd) )
+	ROM_LOAD16_WORD_SWAP( "ic28.bin",     0x0800000, 0x200000, CRC(2a8cfa97) SHA1(a38ab55e88413e0df3f32f23c2a9dcccca4483be) )
+	ROM_LOAD16_WORD_SWAP( "ic30.bin",     0x0a00000, 0x200000, CRC(9a4109e5) SHA1(ba59caac5f5a80fc52c507d8a47f322a380aa9a1) )
+
+	ROM_REGION( 0x80, REGION_USER3, 0 ) /* preconfigured to 1 player */
+	ROM_LOAD( "wasafari.nv", 0x0000, 0x0080, CRC(50861c5a) SHA1(c431703d7b56185f20af1aec04cabb5f49e2d4ba) )
+ROM_END
+
+ROM_START( sanjeon )
+	STV_BIOS
+
+	ROM_REGION32_BE( 0x1c00000, REGION_USER1, ROMREGION_ERASEFF )
+	ROM_LOAD16_BYTE( "ic11",               0x0000001, 0x0200000, CRC(9abae8d4) SHA1(ddbe4c8fff8fa59d63e278e95f245145d2da8aeb) )
+
+	ROM_LOAD( "ic13",    0x0400000, 0x0200000, CRC(f72c1d13) SHA1(a2b168d187034024b83fbbe2f5eec78816285da9) ) /* ic2 good */
+	ROM_LOAD( "ic14",    0x0600000, 0x0200000, CRC(bcd72105) SHA1(fb88a1f2589fef5d9845027646259ec8e781771b) ) /* ic2 good */
+	ROM_LOAD( "ic15",    0x0800000, 0x0200000, CRC(8c9c8352) SHA1(312e9e6435c6e9a4a19b72e234b087d4f5b069a5) ) /* ic3 good */
+	ROM_LOAD( "ic16",    0x0a00000, 0x0200000, CRC(07e11512) SHA1(5fb5e93a167aae501bd799aba98f7dbc3762a795) ) /* ic3 good */
+	ROM_LOAD( "ic17",    0x0c00000, 0x0200000, CRC(46b7b344) SHA1(a325b724e6346f585582bb2581d3063b1c8ddee9) ) /* ic4 good */
+	ROM_LOAD( "ic18",    0x0e00000, 0x0200000, CRC(d48404e1) SHA1(e4927d17cb19f6825f41b41056b89de224cf97de) ) /* ic4 good */
+	ROM_LOAD( "ic19",    0x1000000, 0x0200000, CRC(33d23bb9) SHA1(0179438a0b14ad7eb553a24d86fae778671fcc49) ) /* ic5 good */
+	ROM_LOAD( "ic20",    0x1200000, 0x0200000, CRC(f8cc1038) SHA1(06bcb25eb5df77bd503b0692a96ec66c00976fe9) ) /* ic5 good */
+	ROM_LOAD( "ic21",    0x1400000, 0x0200000, CRC(74ceb649) SHA1(91b7eb699b7167f890528149178644a74ef3ad17) ) /* ic6 good */
+	ROM_LOAD( "ic22",    0x1600000, 0x0200000, CRC(85f31277) SHA1(277c28d44cabd9081a8151d6ec27d47b5606435a) ) /* ic6 good */
+	ROM_LOAD( "ic12",    0x1800000, 0x0400000, CRC(d5ebc84e) SHA1(f990b793cdfadbbac69c680191660f4a2f282ba2) ) /* ic1 good */
+ROM_END
 
 /* TODO: add country codes */
 
@@ -4474,7 +4972,17 @@ GAMEBX( 1998, grdforce,  stvbios, stvbios, stv, stv,  stv,       ROT0, "Success"
 GAMEBX( 1998, elandore,  stvbios, stvbios, stv, stv,  elandore,       ROT0, "Sai-Mate",   "Fighting Dragon Legend Elan Doree", GAME_IMPERFECT_SOUND | GAME_IMPERFECT_GRAPHICS, &generic_ctrl, NULL )
 GAMEBX( 1998, myfairld,  stvbios, stvbios, stv, stvmp,stv,       ROT0, "Micronet",   "Virtual Mahjong 2 - My Fair Lady", GAME_IMPERFECT_SOUND | GAME_IMPERFECT_GRAPHICS, &generic_ctrl, NULL )
 GAMEBX( 1998, rsgun,     stvbios, stvbios, stv, stv,  rsgun,       ROT0, "Treasure",   "Radiant Silvergun", GAME_IMPERFECT_SOUND | GAME_IMPERFECT_GRAPHICS, &generic_ctrl, NULL )
-GAMEBX( 1996, sassisu,   stvbios, stvbios, stv, stv,  ic13,      ROT0, "Sega", 	     "Taisen Tanto-R Sashissu!!", GAME_NO_SOUND | GAME_NOT_WORKING, &generic_ctrl, NULL )
+GAMEBX( 1998, sasissu,   stvbios, stvbios, stv, stv,  ic13,      ROT0, "Sega", 	     "Taisen Tanto-R Sashissu!!", GAME_IMPERFECT_SOUND | GAME_IMPERFECT_GRAPHICS, &generic_ctrl, NULL )
+GAMEBX( 1999, sanjeon,   sasissu, stvbios, stv, stv,  sanjeon,   ROT0, "Sega / Deniam", "DaeJeon! SanJeon SuJeon", GAME_IMPERFECT_SOUND | GAME_IMPERFECT_GRAPHICS, &generic_ctrl, NULL )
+GAMEBX( 1995, critcrsh,  stvbios, stvbios, stv, critcrsh, critcrsh,     ROT0, "Sega", 	     "Critter Crusher", GAME_IMPERFECT_SOUND | GAME_IMPERFECT_GRAPHICS, &generic_ctrl, NULL )
+GAMEBX( 1995, tatacot,   critcrsh, stvbios, stv, critcrsh, critcrsh,     ROT0, "Sega", 	     "Tatacot (Japan)", GAME_IMPERFECT_SOUND | GAME_IMPERFECT_GRAPHICS, &generic_ctrl, NULL )
+GAMEBX( 2000, danchiq,   stvbios, stvbios, stv, stv,  ic13,      ROT0, "Altron",     "Danchi de Quiz: Okusan Yontaku Desuyo!", GAME_IMPERFECT_SOUND | GAME_IMPERFECT_GRAPHICS, &generic_ctrl, NULL )
+GAMEBX( 1999, micrombc,  stvbios, stvbios, stv, stvmedal, stvmedal,     ROT0, "Sega", 	     "Microman Battle Charge", GAME_IMPERFECT_SOUND | GAME_IMPERFECT_GRAPHICS, &generic_ctrl, NULL )
+GAMEBX( 2001, patocar,   stvbios, stvbios, stv, stvmedal, stvmedal,     ROT0, "Sega", 	     "Hashire Patrol Car", GAME_IMPERFECT_SOUND | GAME_IMPERFECT_GRAPHICS, &generic_ctrl, NULL )
+GAMEBX( 2000, skychal,   stvbios, stvbios, stv, stvmedal, stvmedal,     ROT0, "Sega", 	     "Sky Challenger", GAME_IMPERFECT_SOUND | GAME_IMPERFECT_GRAPHICS, &generic_ctrl, NULL )
+GAMEBX( 1998, supgoal,   stvbios, stvbios, stv, stvmedal, stvmedal,     ROT0, "Sega", 	     "Nerae! Super Goal", GAME_IMPERFECT_SOUND | GAME_IMPERFECT_GRAPHICS, &generic_ctrl, NULL )
+GAMEBX( 1997, techbowl,  stvbios, stvbios, stv, stvmedal, stvmedal,     ROT0, "Sega", 	     "Technical Bowling", GAME_IMPERFECT_SOUND | GAME_IMPERFECT_GRAPHICS, &generic_ctrl, NULL )
+GAMEBX( 1998, wasafari,  stvbios, stvbios, stv, stv,  ic13,      ROT0, "Sega", 	     "Wanpaku Safari", GAME_IMPERFECT_SOUND | GAME_IMPERFECT_GRAPHICS | GAME_NOT_WORKING, &generic_ctrl, NULL )
 GAMEBX( 1995, smleague,  stvbios, stvbios, stv, stv,  smleague,     ROT0, "Sega", 	     "Super Major League (US)", GAME_IMPERFECT_SOUND | GAME_IMPERFECT_GRAPHICS, &generic_ctrl, NULL )
 GAMEBX( 1995, finlarch,  smleague, stvbios, stv, stv,  smleague,     ROT0, "Sega", 	     "Final Arch (Japan)", GAME_IMPERFECT_SOUND | GAME_IMPERFECT_GRAPHICS, &generic_ctrl, NULL )
 
