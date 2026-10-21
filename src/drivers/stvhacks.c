@@ -17,6 +17,27 @@ DRIVER_INIT( ic13 )
 }
 
 /*
+Super Major League / Final Arch: each frame the master queues a job for the slave
+(the depth sort of the polygons), waits for the slave to take it (the read pointer
+at 060ffc44) and then clears the "sort done" flag that the slave sets when the job
+is over. The slave is much slower than the master on the real hardware, but in
+coarse time slices it can take the job and finish it before the master looks at the
+pointer again, so the flag is lost and the game hangs. A tight interleave while the
+master polls keeps the order of the real hardware.
+*/
+static READ32_HANDLER( smleague_sync_r )
+{
+	cpu_boost_interleave(0, TIME_IN_USEC(20));
+	return stv_workram_h[0x0ffc44/4];
+}
+
+DRIVER_INIT( smleague )
+{
+	install_mem_read32_handler(0, 0x060ffc44, 0x060ffc47, smleague_sync_r);
+	init_stv();
+}
+
+/*
 
 06013AE8: MOV.L   @($D4,PC),R5
 06013AEA: MOV.L   @($D8,PC),R0

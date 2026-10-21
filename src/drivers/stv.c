@@ -97,16 +97,15 @@ Preliminary Memory map:
 #include "machine/stvcd.h"
 #include "machine/scudsp.h"
 #include "machine/sega315_5881.h"
+#include "state.h"
+#include "includes/stv.h"
 #include <time.h>
-
-extern data32_t* stv_vdp2_regs;
-extern data32_t* stv_vdp2_vram;
-extern data32_t* stv_vdp2_cram;
 
 #define USE_SLAVE 1
 
 /* stvhacks.c */
 DRIVER_INIT( ic13 );
+DRIVER_INIT( smleague );
 void install_stvbios_speedups(void);
 DRIVER_INIT(bakubaku);
 DRIVER_INIT(mausuke);
@@ -133,7 +132,6 @@ data32_t* stv_scu;
 static data32_t* ioga;
 static data16_t* scsp_regs;
 
-int stv_vblank;
 /*SMPC stuff*/
 static UINT8 SCSP_reset;
 static void system_reset(void);
@@ -2231,37 +2229,48 @@ static void stv_hblank_in(int param)
 	scu_test_pending_irqs();
 }
 
+#define STV_LINES	263
+
 static INTERRUPT_GEN( stv_interrupt )
 {
-	scanline = 263 - cpu_getiloops();
+	int vblank_line = stv_vdp2_vblank_start_line();
+
+	scanline = (STV_LINES - 1) - cpu_getiloops();
 
 	/* the end of the previous hblank */
 	stv_slave_irl(0);
 
+	stv_vdp2_scanline(scanline);
+
 	if (scanline == 0)
 	{
 		/* vblank-out */
-		stv_vblank = 0;
 		stv_slave_irl(4);
 		scu_ist |= 1 << 1;
 		scu_test_pending_irqs();
 		scu_timer0_count = 0;
 	}
-	else if (scanline == 224)
+	else if (scanline == vblank_line)
 	{
-		/* vblank-in */
-		stv_vblank = 1;
+		/* vblank-in; the VDP1 changes frame and draws (automatic mode) now, as in MAME */
 		stv_slave_irl(6);
 		stv_scu_raise_irq(0);
+		stv_vdp1_video_update();
 	}
-	else if (scanline == 224 + 8)
+	else if (scanline == vblank_line + 1)
+	{
+		/* the VDP1 erase on VBE comes one line after vblank-in */
+		stv_vdp1_vblank_erase();
+	}
+	else if (scanline == vblank_line + 8)
 	{
 		/* VDP1 draw end, 8 lines after vblank-in as in MAME */
 		stv_scu_raise_irq(13);
 	}
 
-	/* hblank-in, at the end of the visible line */
-	timer_set(TIME_IN_HZ(60 * 264) * 3 / 4, 0, stv_hblank_in);
+	/* no hblank in vblank */
+	if (scanline < vblank_line)
+		timer_set(TIME_IN_HZ(60 * STV_LINES) * 3 / 4, 0, stv_hblank_in);
 }
 
 /*
@@ -2558,6 +2567,8 @@ READ32_HANDLER( stv_scu_r32 )
     }
     else if ( offset == 41 )
     	return scu_ist;
+    else if ( offset == 0x5c/4 )
+    	return DMA_STATUS;	/* undocumented DMA status mirror, smleague/finlarch wait on it */
     else
     {
     	log_cb(RETRO_LOG_DEBUG, LOGPRE "SCU reg read at %d = %08x\n",offset,stv_scu[offset]);
@@ -3102,23 +3113,6 @@ static WRITE32_HANDLER( sinit_w )
 	sh2_set_frt_input(0, PULSE_LINE);
 }
 
-extern WRITE32_HANDLER ( stv_vdp2_vram_w );
-extern READ32_HANDLER ( stv_vdp2_vram_r );
-
-extern WRITE32_HANDLER ( stv_vdp2_cram_w );
-extern READ32_HANDLER ( stv_vdp2_cram_r );
-
-extern WRITE32_HANDLER ( stv_vdp2_regs_w );
-extern READ32_HANDLER ( stv_vdp2_regs_r );
-
-extern VIDEO_START ( stv_vdp2 );
-extern VIDEO_UPDATE( stv_vdp2 );
-
-extern READ32_HANDLER( stv_vdp1_regs_r );
-extern WRITE32_HANDLER( stv_vdp1_regs_w );
-extern READ32_HANDLER ( stv_vdp1_vram_r );
-extern WRITE32_HANDLER ( stv_vdp1_vram_w );
-
 static READ32_HANDLER( stv_workram_h_mirror_r )
 {
 	offset = offset & ((0x0100000/4)-1);
@@ -3140,18 +3134,13 @@ static MEMORY_READ32_START( stv_master_readmem )
 	{ 0x05a00000, 0x05afffff, stv_sh2_soundram_r },
 	{ 0x05b00000, 0x05b00fff, stv_scsp_regs_r32 },
 	/* VDP1 */
-	/*0x05c00000-0x05c7ffff VRAM*/
-	/*0x05c80000-0x05c9ffff Frame Buffer 0*/
-	/*0x05ca0000-0x05cbffff Frame Buffer 1*/
-	/*0x05d00000-0x05d7ffff VDP1 Regs */
-	{ 0x05c00000, 0x05cbffff, stv_vdp1_vram_r },
+	{ 0x05c00000, 0x05c7ffff, stv_vdp1_vram_r },
+	{ 0x05c80000, 0x05cbffff, stv_vdp1_framebuffer0_r },
 	{ 0x05d00000, 0x05d0001f, stv_vdp1_regs_r },
-	{ 0x5e00000 , 0x5efffff, stv_vdp2_vram_r },
-	{ 0x5f00000 , 0x5f7ffff, stv_vdp2_cram_r },
-	{ 0x5f80000 , 0x5fbffff, stv_vdp2_regs_r },
-/*	{ 0x05e00000, 0x05e7ffff, MRA32_RAM },*/
-/*	{ 0x05f00000, 0x05f0ffff, stv_palette_r },  // CRAM /*/
-/*	{ 0x05f80000, 0x05fbffff, stv_vdp2_regs_r32 },  // REGS /*/
+	/* VDP2 (the VRAM is mirrored) */
+	{ 0x05e00000, 0x05efffff, stv_vdp2_vram_r },
+	{ 0x05f00000, 0x05f7ffff, stv_vdp2_cram_r },
+	{ 0x05f80000, 0x05fbffff, stv_vdp2_regs_r },
 	{ 0x05fe0000, 0x05fe00cf, stv_scu_r32 },
 	{ 0x06000000, 0x060fffff, MRA32_BANK3 },
 	{ 0x06100000, 0x07ffffff, stv_workram_h_mirror_r }, /* hanagumi reads the char select 1p icon and timer gfx from here ..*/
@@ -3172,11 +3161,13 @@ static MEMORY_WRITE32_START( stv_master_writemem )
 	{ 0x05a00000, 0x05afffff, stv_sh2_soundram_w },
 	{ 0x05b00000, 0x05b00fff, stv_scsp_regs_w32 },
 	/* VDP1 */
-	{ 0x05c00000, 0x05cbffff, stv_vdp1_vram_w },
+	{ 0x05c00000, 0x05c7ffff, stv_vdp1_vram_w },
+	{ 0x05c80000, 0x05cbffff, stv_vdp1_framebuffer0_w },
 	{ 0x05d00000, 0x05d0001f, stv_vdp1_regs_w },
-	{ 0x5e00000 , 0x5efffff, stv_vdp2_vram_w },
-	{ 0x5f00000 , 0x5f7ffff, stv_vdp2_cram_w },
-	{ 0x5f80000 , 0x5fbffff, stv_vdp2_regs_w },
+	/* VDP2 (the VRAM is mirrored) */
+	{ 0x05e00000, 0x05efffff, stv_vdp2_vram_w },
+	{ 0x05f00000, 0x05f7ffff, stv_vdp2_cram_w },
+	{ 0x05f80000, 0x05fbffff, stv_vdp2_regs_w },
 	{ 0x05fe0000, 0x05fe00cf, stv_scu_w32 },
 	{ 0x06000000, 0x060fffff, MWA32_BANK3 },
 /*	{ 0x06100000, 0x07ffffff, MWA32_NOP },*/
@@ -3194,7 +3185,8 @@ static MEMORY_READ32_START( stv_slave_readmem )
 /*	{ 0x05000000, 0x058fffff, MRA32_RAM },*/
 	{ 0x05a00000, 0x05afffff, stv_sh2_soundram_r },
 	{ 0x05b00000, 0x05b00fff, stv_scsp_regs_r32 },
-	{ 0x05c00000, 0x05cbffff, stv_vdp1_vram_r },
+	{ 0x05c00000, 0x05c7ffff, stv_vdp1_vram_r },
+	{ 0x05c80000, 0x05cbffff, stv_vdp1_framebuffer0_r },
 	{ 0x05d00000, 0x05d0001f, stv_vdp1_regs_r },
 	{ 0x05e00000, 0x05efffff, stv_vdp2_vram_r },
 	{ 0x05f00000, 0x05f7ffff, stv_vdp2_cram_r },
@@ -3216,7 +3208,8 @@ static MEMORY_WRITE32_START( stv_slave_writemem )
 /*	{ 0x05000000, 0x058fffff, MWA32_RAM },*/
 	{ 0x05a00000, 0x05afffff, stv_sh2_soundram_w },
 	{ 0x05b00000, 0x05b00fff, stv_scsp_regs_w32 },
-	{ 0x05c00000, 0x05cbffff, stv_vdp1_vram_w },
+	{ 0x05c00000, 0x05c7ffff, stv_vdp1_vram_w },
+	{ 0x05c80000, 0x05cbffff, stv_vdp1_framebuffer0_w },
 	{ 0x05d00000, 0x05d0001f, stv_vdp1_regs_w },
 	{ 0x05e00000, 0x05efffff, stv_vdp2_vram_w },
 	{ 0x05f00000, 0x05f7ffff, stv_vdp2_cram_w },
@@ -3678,80 +3671,6 @@ MACHINE_INIT( stv )
 
 }
 
-static struct GfxLayout tiles8x8x4_layout =
-{
-	8,8,
-	RGN_FRAC(1,1),
-	4,
-	{ 0, 1, 2, 3 },
-	{ 0, 4, 8, 12, 16, 20, 24, 28 },
-	{ 0*32, 1*32, 2*32, 3*32, 4*32, 5*32, 6*32, 7*32 },
-	32*8
-};
-
-static struct GfxLayout tiles16x16x4_layout =
-{
-	16,16,
-	RGN_FRAC(1,1),
-	4,
-	{ 0, 1, 2, 3 },
-	{ 0, 4, 8, 12, 16, 20, 24, 28,
-	  32*8+0, 32*8+4, 32*8+8, 32*8+12, 32*8+16, 32*8+20, 32*8+24, 32*8+28,
-
-	  },
-	{ 0*32, 1*32, 2*32, 3*32, 4*32, 5*32, 6*32, 7*32,
-	  32*16, 32*17,32*18, 32*19,32*20,32*21,32*22,32*23
-
-	  },
-	32*32
-};
-
-static struct GfxLayout tiles8x8x8_layout =
-{
-	8,8,
-	RGN_FRAC(1,1),
-	8,
-	{ 0, 1, 2, 3, 4, 5, 6, 7 },
-	{ 0, 8, 16, 24, 32, 40, 48, 56 },
-	{ 0*64, 1*64, 2*64, 3*64, 4*64, 5*64, 6*64, 7*64 },
-	64*8
-};
-
-static struct GfxLayout tiles16x16x8_layout =
-{
-	16,16,
-	RGN_FRAC(1,1),
-	8,
-	{ 0, 1, 2, 3, 4, 5, 6, 7 },
-	{ 0, 8, 16, 24, 32, 40, 48, 56,
-	64*8+0, 65*8, 66*8, 67*8, 68*8, 69*8, 70*8, 71*8
-
-	},
-	{ 0*64, 1*64, 2*64, 3*64, 4*64, 5*64, 6*64, 7*64,
-	64*16, 64*17, 64*18, 64*19, 64*20, 64*21, 64*22, 64*23
-	},
-	128*16
-};
-
-
-
-
-static struct GfxDecodeInfo gfxdecodeinfo[] =
-{
-	{ REGION_GFX1, 0, &tiles8x8x4_layout,   0x00, 0x80  },
-	{ REGION_GFX1, 0, &tiles16x16x4_layout,   0x00, 0x80  },
-	{ REGION_GFX1, 0, &tiles8x8x8_layout,   0x00, 0x10  },
-	{ REGION_GFX1, 0, &tiles16x16x8_layout,   0x00, 0x10  },
-
-	/* vdp1 .. pointless for drawing but can help us debug */
-	{ REGION_GFX2, 0, &tiles8x8x4_layout,   0x00, 0x100  },
-	{ REGION_GFX2, 0, &tiles16x16x4_layout,   0x00, 0x100  },
-	{ REGION_GFX2, 0, &tiles8x8x8_layout,   0x00, 0x20  },
-	{ REGION_GFX2, 0, &tiles16x16x8_layout,   0x00, 0x20  },
-
-	{ -1 } /* end of array */
-};
-
 struct sh2_config sh2_conf_master = { 0 };
 struct sh2_config sh2_conf_slave  = { 1 };
 
@@ -3789,7 +3708,7 @@ static MACHINE_DRIVER_START( stv )
 	/* basic machine hardware */
 	MDRV_CPU_ADD(SH2, 28000000) /* 28MHz*/
 	MDRV_CPU_MEMORY(stv_master_readmem,stv_master_writemem)
-	MDRV_CPU_VBLANK_INT(stv_interrupt,264)/*264 lines,224 display lines*/
+	MDRV_CPU_VBLANK_INT(stv_interrupt,STV_LINES)
 	MDRV_CPU_CONFIG(sh2_conf_master)
 
 	MDRV_CPU_ADD(SH2, 28000000) /* 28MHz*/
@@ -3806,13 +3725,13 @@ static MACHINE_DRIVER_START( stv )
 	MDRV_NVRAM_HANDLER(93C46) /* Actually 93c45 */
 
 	/* video hardware */
-	MDRV_VIDEO_ATTRIBUTES(VIDEO_TYPE_RASTER | VIDEO_UPDATE_AFTER_VBLANK | VIDEO_RGB_DIRECT )
-	MDRV_SCREEN_SIZE(1024, 1024)
-	MDRV_VISIBLE_AREA(0*8, 703, 0*8, 479) /* we need to use a resolution as high as the max size it can change to*/
+	MDRV_VIDEO_ATTRIBUTES(VIDEO_TYPE_RASTER | VIDEO_RGB_DIRECT | VIDEO_NEEDS_6BITS_PER_GUN)
+	MDRV_SCREEN_SIZE(704, 512)
+	MDRV_VISIBLE_AREA(0, 319, 0, 223)	/* the VDP2 sets the resolution */
 	MDRV_PALETTE_LENGTH(2048)
-	MDRV_GFXDECODE(gfxdecodeinfo)
 
 	MDRV_VIDEO_START(stv_vdp2)
+	MDRV_VIDEO_STOP(stv_vdp2)
 	MDRV_VIDEO_UPDATE(stv_vdp2)
 
 	MDRV_SOUND_ATTRIBUTES(SOUND_SUPPORTS_STEREO)
@@ -4392,7 +4311,7 @@ ROM_START( shienryu )
 	ROM_LOAD( "eeprom-shienryu.bin", 0x0000, 0x0080, CRC(98db6925) SHA1(e78545e8f62d19f8e00197c62ff0e56f6c85e355) )
 ROM_END
 
-ROM_START( sleague ) /* only runs with the USA bios */
+ROM_START( smleague ) /* only runs with the USA bios */
 	STV_BIOS
 
 	ROM_REGION32_BE( 0x2e00000, REGION_USER1, ROMREGION_ERASEFF )
@@ -4804,7 +4723,7 @@ GAMEBX( 1995, mausuke,   stvbios, stvbios, stv, stv,  mausuke,   ROT0,   "Data E
 GAMEBX( 1996, puyosun,   stvbios, stvbios, stv, stv,  puyosun,   ROT0,   "Compile",  "Puyo Puyo Sun", GAME_IMPERFECT_SOUND | GAME_IMPERFECT_GRAPHICS, &generic_ctrl, NULL )
 GAMEBX( 1997, cotton2,   stvbios, stvbios, stv, stv,  cotton2,   ROT0,   "Success",  "Cotton 2", GAME_IMPERFECT_SOUND | GAME_IMPERFECT_GRAPHICS, &generic_ctrl, NULL )
 GAMEBX( 1998, cottonbm,  stvbios, stvbios, stv, stv,  cottonbm,  ROT0,   "Success",  "Cotton Boomerang", GAME_IMPERFECT_SOUND | GAME_IMPERFECT_GRAPHICS, &generic_ctrl, NULL )
-GAMEBX( 1996, vfkids,    stvbios, stvbios, stv, stv,  ic13,      ROT0,   "Sega", 	 "Virtua Fighter Kids", GAME_NO_SOUND | GAME_IMPERFECT_GRAPHICS, &generic_ctrl, NULL )
+GAMEBX( 1996, vfkids,    stvbios, stvbios, stv, stv,  ic13,      ROT0,   "Sega", 	 "Virtua Fighter Kids", GAME_IMPERFECT_SOUND | GAME_IMPERFECT_GRAPHICS, &generic_ctrl, NULL )
 GAMEBX( 1995, ejihon,    stvbios, stvbios, stv, stv,  ic13,      ROT0,   "Sega", 	 "Ejihon Tantei Jimusyo", GAME_IMPERFECT_SOUND | GAME_IMPERFECT_GRAPHICS, &generic_ctrl, NULL )
 GAMEBX( 1996, colmns97,  stvbios, stvbios, stv, stv,  ic13,      ROT0,   "Sega", 	 "Columns 97", GAME_IMPERFECT_SOUND | GAME_IMPERFECT_GRAPHICS, &generic_ctrl, NULL )
 GAMEBX( 1996, dnmtdeka,  diehard, stvbios, stv, stv,  dnmtdeka,  ROT0,   "Sega", 	 "Dynamite Deka (Japan)", GAME_NO_SOUND | GAME_IMPERFECT_GRAPHICS , &generic_ctrl, NULL )
@@ -4824,16 +4743,16 @@ GAMEBX( 1996, diehard,   stvbios, stvbios, stv, stv,  ic13,      ROT0,   "Sega",
 GAMEBX( 1998, grdforce,  stvbios, stvbios, stv, stv,  stv,       ROT0, "Success",    "Guardian Force", GAME_IMPERFECT_GRAPHICS | GAME_IMPERFECT_SOUND, &generic_ctrl, NULL )
 GAMEBX( 1998, elandore,  stvbios, stvbios, stv, stv,  elandore,       ROT0, "Sai-Mate",   "Fighting Dragon Legend Elan Doree", GAME_NO_SOUND | GAME_NOT_WORKING, &generic_ctrl, NULL )
 GAMEBX( 1998, myfairld,  stvbios, stvbios, stv, stvmp,stv,       ROT0, "Micronet",   "Virtual Mahjong 2 - My Fair Lady", GAME_NO_SOUND | GAME_NOT_WORKING, &generic_ctrl, NULL )
-GAMEBX( 1998, rsgun,     stvbios, stvbios, stv, stv,  rsgun,       ROT0, "Treasure",   "Radiant Silvergun", GAME_NO_SOUND | GAME_NOT_WORKING, &generic_ctrl, NULL )
+GAMEBX( 1998, rsgun,     stvbios, stvbios, stv, stv,  rsgun,       ROT0, "Treasure",   "Radiant Silvergun", GAME_IMPERFECT_SOUND | GAME_IMPERFECT_GRAPHICS, &generic_ctrl, NULL )
 GAMEBX( 1996, sassisu,   stvbios, stvbios, stv, stv,  ic13,      ROT0, "Sega", 	     "Taisen Tanto-R Sashissu!!", GAME_NO_SOUND | GAME_NOT_WORKING, &generic_ctrl, NULL )
-GAMEBX( 1995, sleague,   stvbios, stvbios, stv, stv,  ic13,      ROT0, "Sega", 	     "Super Major League (US)", GAME_NO_SOUND | GAME_NOT_WORKING, &generic_ctrl, NULL )
-GAMEBX( 1995, finlarch,  sleague, stvbios, stv, stv,  ic13,      ROT0, "Sega", 	     "Final Arch (Japan)", GAME_NO_SOUND | GAME_NOT_WORKING, &generic_ctrl, NULL )
+GAMEBX( 1995, smleague,  stvbios, stvbios, stv, stv,  smleague,     ROT0, "Sega", 	     "Super Major League (US)", GAME_IMPERFECT_SOUND | GAME_IMPERFECT_GRAPHICS, &generic_ctrl, NULL )
+GAMEBX( 1995, finlarch,  smleague, stvbios, stv, stv,  smleague,     ROT0, "Sega", 	     "Final Arch (Japan)", GAME_IMPERFECT_SOUND | GAME_IMPERFECT_GRAPHICS, &generic_ctrl, NULL )
 
 /* crashes*/
 GAMEBX( 1995, suikoenb,  stvbios, stvbios, stv, stv,  ic13,      ROT0, "Data East",  "Suikoenbu", GAME_NO_SOUND | GAME_NOT_WORKING, &generic_ctrl, NULL )
 
 /* this needs the dsp*/
-GAMEBX( 1995, vfremix,   stvbios, stvbios, stv, stv,  ic13,      ROT0, "Sega", 	     "Virtua Fighter Remix", GAME_NO_SOUND | GAME_NOT_WORKING, &generic_ctrl, NULL )
+GAMEBX( 1995, vfremix,   stvbios, stvbios, stv, stv,  ic13,      ROT0, "Sega", 	     "Virtua Fighter Remix", GAME_IMPERFECT_SOUND | GAME_IMPERFECT_GRAPHICS, &generic_ctrl, NULL )
 
 /* not working */
 
@@ -4842,9 +4761,9 @@ GAMEBX( 1996, stvbios,   0,       stvbios, stv, stv,  stv,       ROT0, "Sega",  
 GAMEBX( 1998, astrass,   stvbios, stvbios, stv, stv,  astrass,      ROT0, "Sunsoft",    "Astra SuperStars", GAME_NO_SOUND | GAME_NOT_WORKING, &generic_ctrl, NULL )
 GAMEBX( 1996, batmanfr,  stvbios, stvbios, stv, stv,  ic13,      ROT0, "Acclaim",    "Batman Forever", GAME_NO_SOUND | GAME_NOT_WORKING, &generic_ctrl, NULL )
 GAMEBX( 1995, decathlt,  stvbios, stvbios, stv, stv,  ic13,      ROT0, "Sega", 	     "Decathlete", GAME_NO_SOUND | GAME_NOT_WORKING, &generic_ctrl, NULL )
-GAMEBX( 1999, ffreveng,  stvbios, stvbios, stv, stv,  ffreveng,       ROT0, "Capcom",     "Final Fight Revenge", GAME_UNEMULATED_PROTECTION | GAME_NO_SOUND | GAME_NOT_WORKING, &generic_ctrl, NULL )
+GAMEBX( 1999, ffreveng,  stvbios, stvbios, stv, stv,  ffreveng,       ROT0, "Capcom",     "Final Fight Revenge", GAME_IMPERFECT_SOUND | GAME_IMPERFECT_GRAPHICS, &generic_ctrl, NULL )
 GAMEBX( 1996, findlove,  stvbios, stvbios, stv, stv,  ic13,      ROT0, "Daiki",	     "Find Love", GAME_NO_SOUND | GAME_NOT_WORKING, &generic_ctrl, NULL )
-GAMEBX( 1994, gaxeduel,  stvbios, stvbios, stv, stv,  ic13,      ROT0, "Sega", 	     "Golden Axe - The Duel", GAME_NO_SOUND | GAME_NOT_WORKING, &generic_ctrl, NULL )
+GAMEBX( 1994, gaxeduel,  stvbios, stvbios, stv, stv,  ic13,      ROT0, "Sega", 	     "Golden Axe - The Duel", GAME_IMPERFECT_SOUND | GAME_IMPERFECT_GRAPHICS, &generic_ctrl, NULL )
 GAMEBX( 1996, introdon,  stvbios, stvbios, stv, stv,  ic13,      ROT0, "Sunsoft / Success", "Karaoke Quiz Intro Don Don!", GAME_NO_SOUND | GAME_NOT_WORKING, &generic_ctrl, NULL )
 GAMEBX( 1997, maruchan,  stvbios, stvbios, stv, stv,  ic13,      ROT0, "Sega", 	     "Maru-Chan de Goo!", GAME_NO_SOUND | GAME_NOT_WORKING, &generic_ctrl, NULL )
 GAMEBX( 1995, pblbeach,  stvbios, stvbios, stv, stv,  ic13,      ROT0, "TandE Soft",   "Pebble Beach - The Great Shot", GAME_NO_SOUND | GAME_NOT_WORKING, &generic_ctrl, NULL )
@@ -4853,7 +4772,7 @@ GAMEBX( 1995, thunt,     sandor,  stvbios, stv, stv,  ic13,      ROT0, "Sega", 	
 GAMEBX( 1998, seabass,   stvbios, stvbios, stv, stv,  ic13,      ROT0, "A Wave inc. (Able license)", "Sea Bass Fishing", GAME_NO_SOUND | GAME_NOT_WORKING, &generic_ctrl, NULL )
 GAMEBX( 1996, sokyugrt,  stvbios, stvbios, stv, stv,  ic13,      ROT0, "Raizing",    "Soukyugurentai - Terra Diver", GAME_NO_SOUND | GAME_NOT_WORKING, &generic_ctrl, NULL )
 GAMEBX( 1998, sss,       stvbios, stvbios, stv, stv,  sss,      ROT0, "Victor / Cave / Capcom", "Steep Slope Sliders", GAME_NO_SOUND | GAME_NOT_WORKING, &generic_ctrl, NULL )
-GAMEBX( 1998, twcup98,   stvbios, stvbios, stv, stv,  twcup98,      ROT0, "Tecmo",      "Tecmo World Cup '98", GAME_NO_SOUND | GAME_NOT_WORKING, &generic_ctrl, NULL ) /* protected?*/
+GAMEBX( 1998, twcup98,   stvbios, stvbios, stv, stv,  twcup98,      ROT0, "Tecmo",      "Tecmo World Cup '98", GAME_IMPERFECT_SOUND | GAME_IMPERFECT_GRAPHICS, &generic_ctrl, NULL ) /* protected?*/
 GAMEBX( 1997, vmahjong,  stvbios, stvbios, stv, stvmp,stv,       ROT0, "Micronet",   "Virtual Mahjong", GAME_NO_SOUND | GAME_NOT_WORKING, &generic_ctrl, NULL )
 GAMEBX( 1997, znpwfv,    stvbios, stvbios, stv, stv,  ic13,      ROT0, "Sega", 	     "Zen Nippon Pro-Wrestling Featuring Virtua", GAME_NO_SOUND | GAME_NOT_WORKING, &generic_ctrl, NULL )
 

@@ -3357,7 +3357,7 @@ Sep.1994 Quiz Ghost Hunter
 	DRIVER( seabass )
 	DRIVER( shanhigw )
 	DRIVER( shienryu )
-	DRIVER( sleague )
+	DRIVER( smleague )
 	DRIVER( sokyugrt )
 	DRIVER( sss )
 	DRIVER( suikoenb )

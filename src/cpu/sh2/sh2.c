@@ -2666,6 +2666,46 @@ static void sh2_dmac_check(int dma)
 	}
 }
 
+/* the division unit, as in current MAME (sh7604.cpp) */
+static void sh2_divu_start(INT64 dividend)
+{
+	INT32 divisor = (INT32)sh2.m[0x40];
+	INT64 remainder;
+	UINT32 quotient;
+	int i, negative;
+
+	sh2.m[0x41] = (UINT32)dividend;
+
+	if (divisor && (dividend != (INT64)((UINT64)1 << 63) || divisor != -1))
+	{
+		INT64 q = dividend / divisor;
+		if (q == (INT32)q)
+		{
+			sh2.m[0x45] = (UINT32)q;
+			sh2.m[0x44] = (UINT32)(dividend % divisor);
+			return;
+		}
+	}
+
+	/* overflow (zero divisor or a quotient outside 32 bits): the unit stops after three
+	   steps, leaving the partial remainder in DVDNTH; with OVFIE clear DVDNTL saturates */
+	remainder = dividend >> 32;
+	quotient = (UINT32)dividend;
+	for (i = 0; i < 3; i++)
+	{
+		int subtract = (remainder < 0) == (divisor < 0);
+		remainder = (remainder << 1) | ((quotient >> 31) & 1);
+		quotient <<= 1;
+		remainder += subtract ? -(INT64)divisor : (INT64)divisor;
+		quotient |= ((remainder < 0) == (divisor < 0)) ? 1 : 0;
+	}
+	negative = (dividend < 0) != (divisor < 0);
+	sh2.m[0x44] = (UINT32)remainder;
+	sh2.m[0x45] = (sh2.m[0x42] & 2) ? quotient : negative ? 0x80000000 : 0x7fffffff;
+	sh2.m[0x42] |= 1;
+	sh2_recalc_irq();
+}
+
 WRITE32_HANDLER( sh2_internal_w )
 {
 	UINT32 old = sh2.m[offset];
@@ -2728,64 +2768,19 @@ WRITE32_HANDLER( sh2_internal_w )
 		/* Division box*/
 	case 0x40: /* DVSR*/
 		break;
-	case 0x41: /* DVDNT*/
-		{
-			INT32 a = sh2.m[0x41];
-			INT32 b = sh2.m[0x40];
-			log_cb(RETRO_LOG_DEBUG, LOGPRE "SH2 #%d div+mod %d/%d\n", cpu_getactivecpu(), a, b);
-			if (b)
-			{
-				sh2.m[0x45] = a / b;
-				sh2.m[0x44] = a % b;
-			}
-			else
-			{
-				sh2.m[0x42] |= 0x00010000;
-				sh2.m[0x45] = 0x7fffffff;
-				sh2.m[0x44] = 0x7fffffff;
-				sh2_recalc_irq();
-			}
-			break;
-		}
-	case 0x42: /* DVCR*/
-		sh2.m[0x42] = (sh2.m[0x42] & ~0x00001000) | (old & sh2.m[0x42] & 0x00010000);
-		sh2_recalc_irq();
+	case 0x41: /* DVDNT: a 32-bit division, the dividend sign-extended into DVDNTH */
+		sh2_divu_start((INT32)sh2.m[0x41]);
+		break;
+	case 0x42: /* DVCR: OVF (bit 0) and OVFIE (bit 1) are plain read/write bits */
 		break;
 	case 0x43: /* VCRDIV*/
 		sh2_recalc_irq();
 		break;
 	case 0x44: /* DVDNTH*/
 		break;
-	case 0x45: /* DVDNTL*/
-		{
-			INT64 a = sh2.m[0x45] | ((UINT64)(sh2.m[0x44]) << 32);
-			INT64 b = sh2.m[0x40];
-			log_cb(RETRO_LOG_DEBUG, LOGPRE "SH2 #%d div+mod %08x%08x/%08x\n", cpu_getactivecpu(), sh2.m[0x44], sh2.m[0x45], sh2.m[0x40]);
-			if (b)
-			{
-				INT64 q = a / b;
-				if (q != (INT32)q)
-				{
-					sh2.m[0x42] |= 0x00010000;
-					sh2.m[0x45] = 0x7fffffff;
-					sh2.m[0x44] = 0x7fffffff;
-					sh2_recalc_irq();
-				}
-				else
-				{
-					sh2.m[0x45] = q;
-					sh2.m[0x44] = a % b;
-				}
-			}
-			else
-			{
-				sh2.m[0x42] |= 0x00010000;
-				sh2.m[0x45] = 0x7fffffff;
-				sh2.m[0x44] = 0x7fffffff;
-				sh2_recalc_irq();
-			}
-			break;
-		}
+	case 0x45: /* DVDNTL: a 64-bit division of DVDNTH:DVDNTL */
+		sh2_divu_start((INT64)(((UINT64)sh2.m[0x44] << 32) | sh2.m[0x45]));
+		break;
 
 		/* DMA controller*/
 	case 0x60: /* SAR0*/
