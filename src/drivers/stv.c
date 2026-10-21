@@ -106,7 +106,6 @@ Preliminary Memory map:
 /* stvhacks.c */
 DRIVER_INIT( ic13 );
 DRIVER_INIT( smleague );
-void install_stvbios_speedups(void);
 DRIVER_INIT(bakubaku);
 DRIVER_INIT(mausuke);
 DRIVER_INIT(puyosun);
@@ -138,29 +137,9 @@ static void system_reset(void);
 static data8_t en_68k;
 /*SCU stuff*/
 /*Maybe add these in a struct...*/
-static UINT32 scu_src_0,		/* Source DMA lv 0 address*/
-			  scu_src_1,		/* lv 1*/
-			  scu_src_2,		/* lv 2*/
-			  scu_dst_0,		/* Destination DMA lv 0 address*/
-			  scu_dst_1,		/* lv 1*/
-			  scu_dst_2,		/* lv 2*/
-			  scu_src_add_0,	/* Source Addition for DMA lv 0*/
-			  scu_src_add_1,	/* lv 1*/
-			  scu_src_add_2,	/* lv 2*/
-			  scu_dst_add_0,	/* Destination Addition for DMA lv 0*/
-			  scu_dst_add_1,	/* lv 1*/
-			  scu_dst_add_2;	/* lv 2*/
-static INT32  scu_size_0,		/* Transfer DMA size lv 0*/
-			  scu_size_1,		/* lv 1*/
-			  scu_size_2;		/* lv 2*/
-
-
-static void dma_direct_lv0(void);	/*DMA level 0 direct transfer function*/
-static void dma_direct_lv1(void);   /*DMA level 1 direct transfer function*/
-static void dma_direct_lv2(void);   /*DMA level 2 direct transfer function*/
-static void dma_indirect_lv0(void); /*DMA level 0 indirect transfer function*/
-static void dma_indirect_lv1(void); /*DMA level 1 indirect transfer function*/
-static void dma_indirect_lv2(void); /*DMA level 2 indirect transfer function*/
+static void scu_dma_trigger(int level);	/* start a DMA level */
+static void scu_dma_end(int level);
+static void *scu_dma_timer[3];			/* the end of a DMA level */
 
 
 int minit_boost,sinit_boost;
@@ -1825,6 +1804,11 @@ UINT8 PDR2;
 #define SMPC_CONTROL_MODE_PORT_1 IOSEL1 = 0
 #define SMPC_CONTROL_MODE_PORT_2 IOSEL2 = 0
 
+static void smpc_ckchg_nmi(int param)
+{
+	cpu_set_nmi_line(0, PULSE_LINE);
+}
+
 static void system_reset()
 {
 	/*Only backup ram and SMPC ram is retained after that this command is issued.*/
@@ -1976,14 +1960,16 @@ static void stv_SMPC_w8 (int offset, UINT8 data)
 				system_reset();
 				break;
 			case 0x0e:
-				logerror ("SMPC: Change Clock to 352\n");
-				smpc_ram[0x5f]=0x0e;
-				cpu_set_nmi_line(0,PULSE_LINE); /* ff said this causes nmi, should we set a timer then nmi?*/
-				break;
 			case 0x0f:
-				logerror ("SMPC: Change Clock to 320\n");
-				smpc_ram[0x5f]=0x0f;
-				cpu_set_nmi_line(0,PULSE_LINE); /* ff said this causes nmi, should we set a timer then nmi?*/
+				/* CKCHG352 / CKCHG320: the PLL change stops the slave and the sound CPU
+				   and takes about four frames, then an NMI wakes the master from the
+				   SLEEP that follows the command in the BIOS (as in MAME) */
+				logerror ("SMPC: Change Clock to %s\n", (data & 1) ? "320" : "352");
+				smpc_ram[0x5f]=data;
+				cpu_set_halt_line(1, ASSERT_LINE);
+				cpu_set_halt_line(2, ASSERT_LINE);
+				en_68k = 0;
+				timer_set(TIME_IN_HZ(60) * 4, 0, smpc_ckchg_nmi);
 				break;
 			/*"Interrupt Back"*/
 			case 0x10:
@@ -2152,6 +2138,7 @@ both only while TENB is set.
 static UINT32 scu_ist;			/* pending sources */
 static int scu_irq_level;		/* the level being serviced, 0 if none */
 static int scu_irq_vector;
+static void stv_scu_dma_event(int event);
 static int scu_timer0_count;
 static int slave_irl;
 
@@ -2205,6 +2192,7 @@ static void stv_slave_irl(int level)
 
 static void scu_timer1_cb(int param)
 {
+	stv_scu_dma_event(4);
 	stv_scu_raise_irq(4);
 }
 
@@ -2212,13 +2200,17 @@ static void stv_hblank_in(int param)
 {
 	stv_slave_irl(2);
 
+	stv_scu_dma_event(2);
 	scu_ist |= 1 << 2;
 
 	if (stv_scu[38] & 1)	/* TENB */
 	{
 		int timer0_hit = scu_timer0_count == (stv_scu[36] & 0x3ff);
 		if (timer0_hit)
+		{
+			stv_scu_dma_event(3);
 			scu_ist |= 1 << 3;
+		}
 
 		/* timer 1: every line (mode 0) or after a timer 0 hit (mode 1) */
 		if (timer0_hit || !(stv_scu[38] & 0x100))
@@ -2246,6 +2238,7 @@ static INTERRUPT_GEN( stv_interrupt )
 	{
 		/* vblank-out */
 		stv_slave_irl(4);
+		stv_scu_dma_event(1);
 		scu_ist |= 1 << 1;
 		scu_test_pending_irqs();
 		scu_timer0_count = 0;
@@ -2254,6 +2247,7 @@ static INTERRUPT_GEN( stv_interrupt )
 	{
 		/* vblank-in; the VDP1 changes frame and draws (automatic mode) now, as in MAME */
 		stv_slave_irl(6);
+		stv_scu_dma_event(0);
 		stv_scu_raise_irq(0);
 		stv_vdp1_video_update();
 	}
@@ -2265,6 +2259,7 @@ static INTERRUPT_GEN( stv_interrupt )
 	else if (scanline == vblank_line + 8)
 	{
 		/* VDP1 draw end, 8 lines after vblank-in as in MAME */
+		stv_scu_dma_event(6);
 		stv_scu_raise_irq(13);
 	}
 
@@ -2532,29 +2527,7 @@ DMA Status Register:
 00 - DSP side DMA in operation
 
 **********************************************************************************/
-/*
-DMA TODO:
--Verify if there are any kind of bugs,do clean-ups,use better comments
- and macroize for better reading...
--Add timings(but how fast are each DMA?).
--Add level priority & DMA status register.
--Add DMA start factor conditions that are different than 7.
--Add byte data type transfer.
-*/
-
-#define DIRECT_MODE(_lv_)			(!(stv_scu[5+(_lv_*8)] & 0x01000000))
-#define INDIRECT_MODE(_lv_)			  (stv_scu[5+(_lv_*8)] & 0x01000000)
-#define DRUP(_lv_)					  (stv_scu[5+(_lv_*8)] & 0x00010000)
-#define DWUP(_lv_)                    (stv_scu[5+(_lv_*8)] & 0x00000100)
-
 #define DMA_STATUS				(stv_scu[31])
-/*These macros sets the various DMA status flags.*/
-#define SET_D0MV_FROM_0_TO_1	if(!(DMA_STATUS & 0x10))    DMA_STATUS^=0x10
-#define SET_D1MV_FROM_0_TO_1	if(!(DMA_STATUS & 0x100))   DMA_STATUS^=0x100
-#define SET_D2MV_FROM_0_TO_1	if(!(DMA_STATUS & 0x1000))  DMA_STATUS^=0x1000
-#define SET_D0MV_FROM_1_TO_0	if(DMA_STATUS & 0x10) 	    DMA_STATUS^=0x10
-#define SET_D1MV_FROM_1_TO_0	if(DMA_STATUS & 0x100) 	    DMA_STATUS^=0x100
-#define SET_D2MV_FROM_1_TO_0	if(DMA_STATUS & 0x1000)     DMA_STATUS^=0x1000
 
 READ32_HANDLER( stv_scu_r32 )
 {
@@ -2582,142 +2555,17 @@ WRITE32_HANDLER( stv_scu_w32 )
 
 	switch(offset)
 	{
-		/*LV 0 DMA*/
-		case 0:	scu_src_0  = ((stv_scu[0] & 0x07ffffff) >> 0); break;
-		case 1:	scu_dst_0  = ((stv_scu[1] & 0x07ffffff) >> 0); break;
-		case 2: scu_size_0 = ((stv_scu[2] & 0x000fffff) >> 0); break;
-		case 3:
-		/*Read address add value for DMA lv 0*/
-		if(stv_scu[3] & 0x100)
-			scu_src_add_0 = 4;
-		else
-			scu_src_add_0 = 0;/*could be 2...*/
-
-		/*Write address add value for DMA lv 0*/
-		switch(stv_scu[3] & 7)
-		{
-			case 0: scu_dst_add_0 = 2;   break;
-			case 1: scu_dst_add_0 = 4;   break;
-			case 2: scu_dst_add_0 = 8;   break;
-			case 3: scu_dst_add_0 = 16;  break;
-			case 4: scu_dst_add_0 = 32;  break;
-			case 5: scu_dst_add_0 = 64;  break;
-			case 6: scu_dst_add_0 = 128; break;
-			case 7: scu_dst_add_0 = 256; break;
-		}
-		break;
+		/* DxEN: DMA enable (bit 8) and start (bit 0, start factor 7) */
 		case 4:
-/*
--stv_scu[4] bit 0 is DMA starting bit.
-	Used when the start factor is 7.Toggle after execution.
--stv_scu[4] bit 8 is DMA Enable bit.
-	This is an execution mask flag.
--stv_scu[5] bit 0,bit 1 and bit 2 is DMA starting factor.
-	It must be 7 for this specific condition.
--stv_scu[5] bit 24 is Indirect Mode/Direct Mode (0/1).
-*/
-		if(stv_scu[4] & 1 && ((stv_scu[5] & 7) == 7) && stv_scu[4] & 0x100)
-		{
-			if(DIRECT_MODE(0))
-				dma_direct_lv0();
-			else
-				dma_indirect_lv0();
-
-			stv_scu[4]^=1;/*disable starting bit.*/
-		}
-		break;
-		case 5:
-		if(INDIRECT_MODE(0))
-			log_cb(RETRO_LOG_DEBUG, LOGPRE "Indirect Mode DMA lv 0 set\n");
-
-		/*Start factor enable bits,bit 2,bit 1 and bit 0*/
-		if((stv_scu[5] & 7) != 7)
-			log_cb(RETRO_LOG_DEBUG, LOGPRE "Start factor chosen for lv 0 = %d\n",stv_scu[5] & 7);
-		break;
-		/*LV 1 DMA*/
-		case 8:	 scu_src_1  = ((stv_scu[8] &  0x07ffffff) >> 0);  break;
-		case 9:	 scu_dst_1  = ((stv_scu[9] &  0x07ffffff) >> 0);  break;
-		case 10: scu_size_1 = ((stv_scu[10] & 0x00001fff) >> 0);  break;
-		case 11:
-		/*Read address add value for DMA lv 1*/
-		if(stv_scu[11] & 0x100)
-			scu_src_add_1 = 4;
-		else
-			scu_src_add_1 = 0;
-
-		/*Write address add value for DMA lv 1*/
-		switch(stv_scu[11] & 7)
-		{
-			case 0: scu_dst_add_1 = 2;   break;
-			case 1: scu_dst_add_1 = 4;   break;
-			case 2: scu_dst_add_1 = 8;   break;
-			case 3: scu_dst_add_1 = 16;  break;
-			case 4: scu_dst_add_1 = 32;  break;
-			case 5: scu_dst_add_1 = 64;  break;
-			case 6: scu_dst_add_1 = 128; break;
-			case 7: scu_dst_add_1 = 256; break;
-		}
-		break;
 		case 12:
-		if(stv_scu[12] & 1 && ((stv_scu[13] & 7) == 7) && stv_scu[12] & 0x100)
-		{
-			if(DIRECT_MODE(1))
-				dma_direct_lv1();
-			else
-				dma_indirect_lv1();
-
-			stv_scu[12]^=1;
-		}
-		break;
-		case 13:
-		if(INDIRECT_MODE(1))
-			log_cb(RETRO_LOG_DEBUG, LOGPRE "Indirect Mode DMA lv 1 set\n");
-
-		if((stv_scu[13] & 7) != 7)
-			log_cb(RETRO_LOG_DEBUG, LOGPRE "Start factor chosen for lv 1 = %d\n",stv_scu[13] & 7);
-		break;
-		/*LV 2 DMA*/
-		case 16: scu_src_2  = ((stv_scu[16] & 0x07ffffff) >> 0);  break;
-		case 17: scu_dst_2  = ((stv_scu[17] & 0x07ffffff) >> 0);  break;
-		case 18: scu_size_2 = ((stv_scu[18] & 0x00001fff) >> 0);  break;
-		case 19:
-		/*Read address add value for DMA lv 2*/
-		if(stv_scu[19] & 0x100)
-			scu_src_add_2 = 4;
-		else
-			scu_src_add_2 = 0;
-
-		/*Write address add value for DMA lv 2*/
-		switch(stv_scu[19] & 7)
-		{
-			case 0: scu_dst_add_2 = 2;   break;
-			case 1: scu_dst_add_2 = 4;   break;
-			case 2: scu_dst_add_2 = 8;   break;
-			case 3: scu_dst_add_2 = 16;  break;
-			case 4: scu_dst_add_2 = 32;  break;
-			case 5: scu_dst_add_2 = 64;  break;
-			case 6: scu_dst_add_2 = 128; break;
-			case 7: scu_dst_add_2 = 256; break;
-		}
-		break;
 		case 20:
-		if(stv_scu[20] & 1 && ((stv_scu[21] & 7) == 7) && stv_scu[20] & 0x100)
 		{
-			if(DIRECT_MODE(2))
-				dma_direct_lv2();
-			else
-				dma_indirect_lv2();
-
-			stv_scu[20]^=1;
+			int level = offset / 8;
+			if ((stv_scu[offset] & 0x101) == 0x101 && (stv_scu[offset + 1] & 7) == 7)
+				scu_dma_trigger(level);
+			stv_scu[offset] &= ~1;
+			break;
 		}
-		break;
-		case 21:
-		if(INDIRECT_MODE(2))
-			log_cb(RETRO_LOG_DEBUG, LOGPRE "Indirect Mode DMA lv 2 set\n");
-
-		if((stv_scu[21] & 7) != 7)
-			log_cb(RETRO_LOG_DEBUG, LOGPRE "Start factor chosen for lv 2 = %d\n",stv_scu[21] & 7);
-		break;
 		case 31: log_cb(RETRO_LOG_DEBUG, LOGPRE "Warning: DMA status WRITE! Offset %02x(%d)\n",offset*4,offset); break;
 		/*DSP section*/
 		/*Use functions so it is easier to work out*/
@@ -2779,288 +2627,153 @@ WRITE32_HANDLER( stv_scu_w32 )
 	}
 }
 
-
-static void dma_direct_lv0()
+/* the DMA start factors other than the start bit (as in MAME): 0 vblank-in,
+   1 vblank-out, 2 hblank-in, 3 timer 0, 4 timer 1, 5 sound request, 6 VDP1 end */
+static void stv_scu_dma_event(int event)
 {
-	static UINT32 tmp_src,tmp_dst,tmp_size;
-	logerror("DMA lv 0 transfer START\n"
-			 "Start %08x End %08x Size %04x\n",scu_src_0,scu_dst_0,scu_size_0);
-	log_cb(RETRO_LOG_DEBUG, LOGPRE "Start Add %04x Destination Add %04x\n",scu_src_add_0,scu_dst_add_0);
-
-	SET_D0MV_FROM_0_TO_1;
-
-	tmp_size = scu_size_0;
-	if(!(DRUP(0))) tmp_src = scu_src_0;
-	if(!(DWUP(0))) tmp_dst = scu_dst_0;
-
-	for (; scu_size_0 > 0; scu_size_0-=scu_dst_add_0)
-	{
-		if(scu_dst_add_0 == 2)
-			cpu_writemem16bew_word(scu_dst_0,cpu_readmem16bew_word(scu_src_0));
-		else
-			cpu_writemem32bedw_dword(scu_dst_0,cpu_readmem32bedw_dword(scu_src_0));
-
-		scu_dst_0+=scu_dst_add_0;
-		scu_src_0+=scu_src_add_0;
-	}
-
-	scu_size_0 = tmp_size;
-	if(!(DRUP(0))) scu_src_0 = tmp_src;
-	if(!(DWUP(0))) scu_dst_0 = tmp_dst;
-
-	log_cb(RETRO_LOG_DEBUG, LOGPRE "DMA transfer END\n");
-	stv_scu_raise_irq(11);	/* DMA level 0 end */
-
-	SET_D0MV_FROM_1_TO_0;
+	int level;
+	for (level = 0; level < 3; level++)
+		if ((stv_scu[level * 8 + 4] & 0x100) && (stv_scu[level * 8 + 5] & 7) == event)
+			scu_dma_trigger(level);
 }
 
-static void dma_direct_lv1()
+
+/*
+SCU DMA, as in current MAME (saturn_scu.cpp), except that the data is moved at
+once; the level stays busy and its end interrupt comes after the time of the
+transfer (one word per clock, MAME's ticks).
+- a transfer to the work RAM H (C-bus) always writes consecutive words, whatever
+  the add value (astrass, vmahjong, pblbeach)
+- a direct transfer between the same bus, or from an address the SCU can't read
+  (BIOS, work RAM L, backup RAM), is illegal and only raises the illegal DMA irq
+*/
+
+/* the bus of an address: 0 none, 1 A-bus, 2 B-bus, 3 C-bus */
+static int scu_dma_bus(UINT32 address)
 {
-	static UINT32 tmp_src,tmp_dst,tmp_size;
-	logerror("DMA lv 1 transfer START\n"
-			 "Start %08x End %08x Size %04x\n",scu_src_1,scu_dst_1,scu_size_1);
-	log_cb(RETRO_LOG_DEBUG, LOGPRE "Start Add %04x Destination Add %04x\n",scu_src_add_1,scu_dst_add_1);
-
-	SET_D1MV_FROM_0_TO_1;
-
-	tmp_size = scu_size_1;
-	if(!(DRUP(1))) tmp_src = scu_src_1;
-	if(!(DWUP(1))) tmp_dst = scu_dst_1;
-
-	for (; scu_size_1 > 0; scu_size_1-=scu_dst_add_1)
+	switch (address & 0x07000000)
 	{
-		if(scu_dst_add_1 == 2)
-			cpu_writemem16bew_word(scu_dst_1,cpu_readmem16bew_word(scu_src_1));
-		else
-			cpu_writemem32bedw_dword(scu_dst_1,cpu_readmem32bedw_dword(scu_src_1));
-
-		scu_dst_1+=scu_dst_add_1;
-		scu_src_1+=scu_src_add_1;
-	}
-
-	scu_size_1 = tmp_size;
-	if(!(DRUP(1))) scu_src_1 = tmp_src;
-	if(!(DWUP(1))) scu_dst_1 = tmp_dst;
-
-	log_cb(RETRO_LOG_DEBUG, LOGPRE "DMA transfer END\n");
-	stv_scu_raise_irq(10);	/* DMA level 1 end */
-
-	SET_D1MV_FROM_1_TO_0;
-}
-
-static void dma_direct_lv2()
-{
-	static UINT32 tmp_src,tmp_dst,tmp_size;
-	logerror("DMA lv 2 transfer START\n"
-			 "Start %08x End %08x Size %04x\n",scu_src_2,scu_dst_2,scu_size_2);
-	log_cb(RETRO_LOG_DEBUG, LOGPRE "Start Add %04x Destination Add %04x\n",scu_src_add_2,scu_dst_add_2);
-
-	SET_D2MV_FROM_0_TO_1;
-
-	tmp_size = scu_size_2;
-	if(!(DRUP(2))) tmp_src = scu_src_2;
-	if(!(DWUP(2))) tmp_dst = scu_dst_2;
-
-	for (; scu_size_2 > 0; scu_size_2-=scu_dst_add_2)
-	{
-		if(scu_dst_add_2 == 2)
-			cpu_writemem16bew_word(scu_dst_2,cpu_readmem16bew_word(scu_src_2));
-		else
-			cpu_writemem32bedw_dword(scu_dst_2,cpu_readmem32bedw_dword(scu_src_2));
-
-		scu_dst_2+=scu_dst_add_2;
-		scu_src_2+=scu_src_add_2;
-	}
-
-	scu_size_2 = tmp_size;
-	if(!(DRUP(2))) scu_src_2 = tmp_src;
-	if(!(DWUP(2))) scu_dst_2 = tmp_dst;
-
-	log_cb(RETRO_LOG_DEBUG, LOGPRE "DMA transfer END\n");
-	stv_scu_raise_irq(9);	/* DMA level 2 end */
-
-	SET_D2MV_FROM_1_TO_0;
-}
-
-static void dma_indirect_lv0()
-{
-	/*Helper to get out of the cycle*/
-	UINT8 job_done = 0;
-	/*temporary storage for the transfer data*/
-	UINT32 tmp_src;
-
-	SET_D0MV_FROM_0_TO_1;
-
-	do{
-		tmp_src = scu_dst_0;
-
-		/*Thanks for Runik of Saturnin for pointing this out...*/
-		scu_size_0 = cpu_readmem32bedw_dword(scu_dst_0);
-		scu_src_0 =  cpu_readmem32bedw_dword(scu_dst_0+8);
-		scu_dst_0 =  cpu_readmem32bedw_dword(scu_dst_0+4);
-
-		/*Indirect Mode end factor*/
-		if(scu_src_0 & 0x80000000)
-			job_done = 1;
-
-		logerror("DMA lv 0 indirect mode transfer START\n"
-			 	 "Start %08x End %08x Size %04x\n",scu_src_0,scu_dst_0,scu_size_0);
-		log_cb(RETRO_LOG_DEBUG, LOGPRE "Start Add %04x Destination Add %04x\n",scu_src_add_0,scu_dst_add_0);
-
-		/*guess,but I believe it's right.*/
-		scu_src_0 &=0x07ffffff;
-		scu_dst_0 &=0x07ffffff;
-		scu_size_0 &=0xfffff;
-
-		for (; scu_size_0 > 0; scu_size_0-=scu_dst_add_0)
-		{
-			if(scu_dst_add_0 == 2)
-				cpu_writemem32bedw_word(scu_dst_0,cpu_readmem32bedw_word(scu_src_0));
-			else
+		case 0x02000000:
+		case 0x03000000:
+		case 0x04000000:
+			return 1;
+		case 0x05000000:
+			switch (address & 0x00f00000)
 			{
-				/* some games, eg columns97 are a bit weird, I'm not sure this is correct
-				  they start a dma on a 2 byte boundary in 4 byte add mode, using the dword reads we
-				  can't access 2 byte boundaries, and the end of the sprite list never gets marked,
-				  the length of the transfer is also set to a 2 byte boundary, maybe the add values
-				  should be different, I don't know */
-				cpu_writemem32bedw_word(scu_dst_0,cpu_readmem32bedw_word(scu_src_0));
-				cpu_writemem32bedw_word(scu_dst_0+2,cpu_readmem32bedw_word(scu_src_0+2));
+				case 0x00800000:
+					return 1;
+				case 0x00a00000: case 0x00b00000:	/* sound */
+				case 0x00c00000: case 0x00d00000:	/* VDP1 */
+				case 0x00e00000: case 0x00f00000:	/* VDP2, SCU */
+					return 2;
+				default:
+					return (address & 0x00800000) ? 0 : 1;	/* A-bus dummy */
 			}
-			scu_dst_0+=scu_dst_add_0;
-			scu_src_0+=scu_src_add_0;
+		case 0x06000000:
+			return 3;
+	}
+	return 0;
+}
+
+/* move one block a word at a time, returns the words moved */
+static UINT32 scu_dma_block(UINT32 *src, UINT32 *dst, UINT32 size, int src_add, int dst_add)
+{
+	UINT32 count = 0, words = 0;
+	int cbus = scu_dma_bus(*dst) == 3;
+
+	do
+	{
+		data16_t data = cpu_readmem32bedw_word(*src & 0x07fffffe);
+		cpu_writemem32bedw_word(*dst & 0x07fffffe, data);
+		*src += src_add >> 1;
+		*dst += cbus ? 2 : dst_add;
+		count += 2;
+		words++;
+	} while (count < size);
+
+	return words;
+}
+
+static void scu_dma_end(int level)
+{
+	DMA_STATUS &= ~(0x30 << (level * 4));
+	stv_scu_raise_irq(11 - level);	/* DMA level end */
+}
+
+static void scu_dma_trigger(int level)
+{
+	UINT32 *r = &stv_scu[level * 8];
+	int src_add = (r[3] & 0x100) ? 4 : 0;
+	int dst_add = 1 << (r[3] & 7);
+	UINT32 ticks;
+
+	/* a level that is still moving ignores the start */
+	if (DMA_STATUS & (0x30 << (level * 4)))
+		return;
+
+	if (dst_add == 1)
+		dst_add = 0;
+
+	/* the SH-2 that started it may not be the active context (blank events) */
+	cpuintrf_push_context(0);
+
+	if (r[5] & 0x01000000)
+	{
+		/* indirect: a table of size, destination and source, bit 31 of the source ends it */
+		UINT32 index = r[1] & 0x07fffffc;
+		int end;
+
+		ticks = 8;
+		do
+		{
+			UINT32 size = cpu_readmem32bedw_dword(index);
+			UINT32 dst = cpu_readmem32bedw_dword(index + 4);
+			UINT32 src = cpu_readmem32bedw_dword(index + 8);
+
+			end = src >> 31;
+			src &= 0x07ffffff;
+			dst &= 0x07ffffff;
+			size &= level ? 0x3ffff : 0xfffff;
+			ticks += 3 + scu_dma_block(&src, &dst, size, src_add, dst_add);
+			index += 12;
+			if (r[5] & 0x100)	/* WUP */
+				r[1] = index;
+		} while (!end && ticks < 0x2000000);
+	}
+	else
+	{
+		UINT32 src = r[0] & 0x07ffffff;
+		UINT32 dst = r[1] & 0x07ffffff;
+		UINT32 size = r[2] & (level ? 0xfff : 0xfffff);
+		int src_bus = scu_dma_bus(src), dst_bus = scu_dma_bus(dst);
+
+		if (!src_bus || !dst_bus || src_bus == dst_bus)
+		{
+			cpuintrf_pop_context();
+			stv_scu_raise_irq(12);	/* illegal DMA */
+			return;
 		}
 
-		if(DRUP(0))	cpu_writemem32bedw_dword(tmp_src+8,scu_src_0|job_done ? 0x80000000 : 0);
-		if(DWUP(0)) cpu_writemem32bedw_dword(tmp_src+4,scu_dst_0);
+		if (!size)
+			size = level ? 0x1000 : 0x100000;
 
-		scu_dst_0 = tmp_src+0xc;
+		/* gunblaze: a maximum size transfer to the VDP1 would go past its VRAM */
+		if ((dst & 0x07f00000) == 0x05c00000 && size >= 0x80000)
+			size = 0x80000 - (dst & 0x7fffe);
 
-	}while(job_done == 0);
+		ticks = 8 + scu_dma_block(&src, &dst, size, src_add, dst_add);
 
-	stv_scu_raise_irq(11);	/* DMA level 0 end */
+		if (r[5] & 0x10000)	/* RUP */
+			r[0] = src;
+		if (r[5] & 0x100)	/* WUP */
+			r[1] = dst;
+	}
 
-	SET_D0MV_FROM_1_TO_0;
-}
+	cpuintrf_pop_context();
 
-static void dma_indirect_lv1()
-{
-	/*Helper to get out of the cycle*/
-	UINT8 job_done = 0;
-	/*temporary storage for the transfer data*/
-	UINT32 tmp_src;
-
-	SET_D1MV_FROM_0_TO_1;
-
-	do{
-		tmp_src = scu_dst_1;
-
-		scu_size_1 = cpu_readmem32bedw_dword(scu_dst_1);
-		scu_src_1 =  cpu_readmem32bedw_dword(scu_dst_1+8);
-		scu_dst_1 =  cpu_readmem32bedw_dword(scu_dst_1+4);
-
-		/*Indirect Mode end factor*/
-		if(scu_src_1 & 0x80000000)
-			job_done = 1;
-
-		logerror("DMA lv 1 indirect mode transfer START\n"
-			 	 "Start %08x End %08x Size %04x\n",scu_src_1,scu_dst_1,scu_size_1);
-		log_cb(RETRO_LOG_DEBUG, LOGPRE "Start Add %04x Destination Add %04x\n",scu_src_add_1,scu_dst_add_1);
-
-		/*guess,but I believe it's right.*/
-		scu_src_1 &=0x07ffffff;
-		scu_dst_1 &=0x07ffffff;
-		scu_size_1 &=0xffff;
-
-
-		for (; scu_size_1 > 0; scu_size_1-=scu_dst_add_1)
-		{
-
-			if(scu_dst_add_1 == 2)
-				cpu_writemem32bedw_word(scu_dst_1,cpu_readmem32bedw_word(scu_src_1));
-			else
-			{
-				/* some games, eg columns97 are a bit weird, I'm not sure this is correct
-				  they start a dma on a 2 byte boundary in 4 byte add mode, using the dword reads we
-				  can't access 2 byte boundaries, and the end of the sprite list never gets marked,
-				  the length of the transfer is also set to a 2 byte boundary, maybe the add values
-				  should be different, I don't know */
-				cpu_writemem32bedw_word(scu_dst_1,cpu_readmem32bedw_word(scu_src_1));
-				cpu_writemem32bedw_word(scu_dst_1+2,cpu_readmem32bedw_word(scu_src_1+2));
-			}
-			scu_dst_1+=scu_dst_add_1;
-			scu_src_1+=scu_src_add_1;
-		}
-
-		if(DRUP(1))	cpu_writemem32bedw_dword(tmp_src+8,scu_src_1|job_done ? 0x80000000 : 0);
-		if(DWUP(1)) cpu_writemem32bedw_dword(tmp_src+4,scu_dst_1);
-
-		scu_dst_1 = tmp_src+0xc;
-
-	}while(job_done == 0);
-
-	stv_scu_raise_irq(10);	/* DMA level 1 end */
-
-	SET_D1MV_FROM_1_TO_0;
-}
-
-static void dma_indirect_lv2()
-{
-	/*Helper to get out of the cycle*/
-	UINT8 job_done = 0;
-	/*temporary storage for the transfer data*/
-	UINT32 tmp_src;
-
-	SET_D2MV_FROM_0_TO_1;
-
-	do{
-		tmp_src = scu_dst_2;
-
-		scu_size_2 = cpu_readmem32bedw_dword(scu_dst_2);
-		scu_src_2 =  cpu_readmem32bedw_dword(scu_dst_2+8);
-		scu_dst_2 =  cpu_readmem32bedw_dword(scu_dst_2+4);
-
-		/*Indirect Mode end factor*/
-		if(scu_src_2 & 0x80000000)
-			job_done = 1;
-
-		logerror("DMA lv 2 indirect mode transfer START\n"
-			 	 "Start %08x End %08x Size %04x\n",scu_src_2,scu_dst_2,scu_size_2);
-		log_cb(RETRO_LOG_DEBUG, LOGPRE "Start Add %04x Destination Add %04x\n",scu_src_add_2,scu_dst_add_2);
-
-		/*guess,but I believe it's right.*/
-		scu_src_2 &=0x07ffffff;
-		scu_dst_2 &=0x07ffffff;
-		scu_size_2 &=0xffff;
-
-		for (; scu_size_2 > 0; scu_size_2-=scu_dst_add_2)
-		{
-			if(scu_dst_add_2 == 2)
-				cpu_writemem32bedw_word(scu_dst_2,cpu_readmem32bedw_word(scu_src_2));
-			else
-			{
-				/* some games, eg columns97 are a bit weird, I'm not sure this is correct
-				  they start a dma on a 2 byte boundary in 4 byte add mode, using the dword reads we
-				  can't access 2 byte boundaries, and the end of the sprite list never gets marked,
-				  the length of the transfer is also set to a 2 byte boundary, maybe the add values
-				  should be different, I don't know */
-				cpu_writemem32bedw_word(scu_dst_2,cpu_readmem32bedw_word(scu_src_2));
-				cpu_writemem32bedw_word(scu_dst_2+2,cpu_readmem32bedw_word(scu_src_2+2));
-			}
-
-			scu_dst_2+=scu_dst_add_2;
-			scu_src_2+=scu_src_add_2;
-		}
-
-		if(DRUP(2))	cpu_writemem32bedw_dword(tmp_src+8,scu_src_2|job_done ? 0x80000000 : 0);
-		if(DWUP(2)) cpu_writemem32bedw_dword(tmp_src+4,scu_dst_2);
-
-		scu_dst_2 = tmp_src+0xc;
-
-	}while(job_done == 0);
-
-	stv_scu_raise_irq(9);	/* DMA level 2 end */
-
-	SET_D2MV_FROM_1_TO_0;
+	/* moving until the end */
+	DMA_STATUS |= 0x10 << (level * 4);
+	timer_adjust(scu_dma_timer[level], TIME_IN_HZ(57272720) * ticks, level, 0);
 }
 
 
@@ -3152,8 +2865,8 @@ static MEMORY_WRITE32_START( stv_master_writemem )
 	{ 0x00180000, 0x0018ffff, MWA32_BANK5 }, /* backup ram*/
 	{ 0x00200000, 0x002fffff, MWA32_BANK4 }, /* workram low*/
 	{ 0x00400000, 0x0040001f, stv_io_w32 ,&ioga },
-	{ 0x01000000, 0x01000003, minit_w },
-	{ 0x01406f40, 0x01406f43, minit_w },	/* needed by prikura */	
+	{ 0x01000000, 0x017fffff, minit_w },	/* MINIT, the whole mirror (prikura writes 0x01406f40) */
+	{ 0x01800000, 0x01ffffff, sinit_w },	/* SINIT */
 	{ 0x02000000, 0x04ffffff, MWA32_ROM },
 /*	{ 0x05000000, 0x058fffff, MWA32_RAM },*/
 	{ 0x05800000, 0x0589ffff, cdregister_w },
@@ -3202,8 +2915,8 @@ static MEMORY_WRITE32_START( stv_slave_writemem )
 	{ 0x00180000, 0x0018ffff, MWA32_BANK5 },
 	{ 0x00200000, 0x002fffff, MWA32_BANK4 },
 	{ 0x00400000, 0x0040001f, stv_io_w32 ,&ioga },
-/*	{ 0x01000000, 0x01000003, minit_w },*/
-	{ 0x01800000, 0x01800003, sinit_w },
+	{ 0x01000000, 0x017fffff, minit_w },
+	{ 0x01800000, 0x01ffffff, sinit_w },
 	{ 0x02000000, 0x04ffffff, MWA32_ROM },
 /*	{ 0x05000000, 0x058fffff, MWA32_RAM },*/
 	{ 0x05a00000, 0x05afffff, stv_sh2_soundram_w },
@@ -3606,8 +3319,6 @@ DRIVER_INIT ( stv )
 	cpu_setbank(4,&stv_workram_l[0x000000]);
 	cpu_setbank(5,&stv_backupram[0x000000]);
 
-	install_stvbios_speedups();
-
 	/* the cartridge space is 0x02000000-0x04ffffff; past the ROMs it reads
 	   as erased flash (MAME's carts are 0x3000000 bytes, 0xff filled) */
 	if (memory_region_length(REGION_USER1) < 0x3000000)
@@ -3650,6 +3361,16 @@ MACHINE_INIT( stv )
 	scu_ist = 0;
 	scu_irq_level = 0;
 	scu_irq_vector = 0;
+	{
+		int level;
+		for (level = 0; level < 3; level++)
+		{
+			if (!scu_dma_timer[level])
+				scu_dma_timer[level] = timer_alloc(scu_dma_end);
+			timer_adjust(scu_dma_timer[level], TIME_NEVER, 0, 0);
+		}
+		stv_scu[31] = 0;	/* no DMA moving */
+	}
 	scu_timer0_count = 0;
 	slave_irl = 0;
 	cpu_set_irq_callback(0, stv_master_irq_callback);
@@ -3703,6 +3424,14 @@ static struct SCSPinterface scsp_interface =
 	{ scsp_irq, },
 };
 
+/* the 93c45 EEPROM, with the factory settings of the games that need them */
+static NVRAM_HANDLER( stv )
+{
+	nvram_handler_93C46(file, read_or_write);
+	if (!read_or_write && !file && memory_region(REGION_USER3))
+		EEPROM_set_data(memory_region(REGION_USER3), 0x80);
+}
+
 static MACHINE_DRIVER_START( stv )
 
 	/* basic machine hardware */
@@ -3722,7 +3451,7 @@ static MACHINE_DRIVER_START( stv )
 	MDRV_VBLANK_DURATION(DEFAULT_60HZ_VBLANK_DURATION)
 
 	MDRV_MACHINE_INIT(stv)
-	MDRV_NVRAM_HANDLER(93C46) /* Actually 93c45 */
+	MDRV_NVRAM_HANDLER(stv) /* a 93c45 */
 
 	/* video hardware */
 	MDRV_VIDEO_ATTRIBUTES(VIDEO_TYPE_RASTER | VIDEO_RGB_DIRECT | VIDEO_NEEDS_6BITS_PER_GUN)
@@ -3756,8 +3485,6 @@ MACHINE_DRIVER_END
 	ROM_REGION( 0x080000, REGION_CPU2, 0 ) /* SH2 code */ \
 	ROM_COPY( REGION_CPU1,0,0,0x080000) \
 	ROM_REGION( 0x100000, REGION_CPU3, 0 ) /* 68000 code */ \
-	ROM_REGION( 0x100000, REGION_GFX1, 0 ) /* VDP2 GFX */ \
-	ROM_REGION( 0x100000, REGION_GFX2, 0 ) /* VDP1 GFX */ \
 
 ROM_START( stvbios )
 	STV_BIOS
@@ -3990,6 +3717,7 @@ ROM_START( fhboxers )
 	ROM_LOAD16_WORD_SWAP( "mpr18539.8",    0x1c00000, 0x0400000, CRC(62b3908c) SHA1(3f00e49beb0e5575cc4250a25c41f04dc91d6ed0) ) /* good */
 	ROM_LOAD16_WORD_SWAP( "mpr18540.9",    0x2000000, 0x0400000, CRC(4c2b59a4) SHA1(4d15503fcff0e9e0d1ed3bac724278102b506da0) ) /* good */
 
+	ROM_REGION( 0x80, REGION_USER3, 0 ) /* the EEPROM as set up at the factory */
 	ROM_LOAD( "fhboxers.nv", 0x0000, 0x0080, CRC(590fd6da) SHA1(1abe71c62c51a246d854f02cd4cb79fd0d427e88) )
 ROM_END
 
@@ -4013,6 +3741,7 @@ ROM_START( findlove )
 	ROM_LOAD16_WORD_SWAP( "mpr20435.11",   0x2800000, 0x0400000, CRC(263a2e48) SHA1(27ef4bf577d240e36dcb6e6a09b9c5f24e59ce8c) ) /* good */
 	ROM_LOAD16_WORD_SWAP( "mpr20436.12",   0x2c00000, 0x0400000, CRC(e3823f49) SHA1(754d48635bd1d4fb01ff665bfe2a71593d92f688) ) /* good */
 
+	ROM_REGION( 0x80, REGION_USER3, 0 ) /* the EEPROM as set up at the factory */
 	ROM_LOAD( "findlove.nv", 0x0000, 0x0080, CRC(df2fa9f6) SHA1(f05450e1648eafd2ffb52e50769f07bdc75ffb95) )
 ROM_END
 
@@ -4123,6 +3852,7 @@ ROM_START( kiwames )
 	ROM_LOAD16_WORD_SWAP( "mpr18739.3",    0x0800000, 0x0400000, CRC(eb41fa67) SHA1(d12acebb1df9eafd17aff1841087f5017225e7e7) ) /* good */
 	ROM_LOAD16_WORD_SWAP( "mpr18740.4",    0x0c00000, 0x0200000, CRC(9ca7962f) SHA1(a09e0db2246b34ca7efa3165afbc5ba292a95398) ) /* good */
 
+	ROM_REGION( 0x80, REGION_USER3, 0 ) /* the EEPROM as set up at the factory */
 	ROM_LOAD( "kiwames.nv", 0x0000, 0x0080, CRC(c7002732) SHA1(57395d256a58ddcedd354ce1f2c458321be40505) )
 ROM_END
 
@@ -4157,6 +3887,7 @@ ROM_START( myfairld )
 	ROM_LOAD16_WORD_SWAP( "mpr20994.1",    0x1800000, 0x0400000, CRC(a69243a0) SHA1(e5a1b6ec62bdd5b015ed6cf48f5a6aabaf4bd837) ) /* good */
 	ROM_LOAD16_WORD_SWAP( "mpr21001.8",    0x1c00000, 0x0400000, CRC(95fbe549) SHA1(8cfb48f353b2849600373d66f293f103bca700df) ) /* good */
 
+	ROM_REGION( 0x80, REGION_USER3, 0 ) /* the EEPROM as set up at the factory */
 	ROM_LOAD( "myfairld.nv", 0x0000, 0x0080, CRC(c7cf3a5a) SHA1(5365f38047821305658f94395f03cf2c49c87576) )
 ROM_END
 
@@ -4289,6 +4020,7 @@ ROM_START( seabass )
 	ROM_LOAD16_WORD_SWAP( "mpr20556.8",    0x1c00000, 0x0400000, CRC(1fd70c6c) SHA1(d9d2e362d13238216f4f7e10095fb8383bbd91e8) ) /* good */
 	ROM_LOAD16_WORD_SWAP( "mpr20557.9",    0x2000000, 0x0400000, CRC(3c9ba442) SHA1(2e5b795cf4cdc11ab3e4887b2f77c7147c6e3eec) ) /* good */
 
+	ROM_REGION( 0x80, REGION_USER3, 0 ) /* the EEPROM as set up at the factory */
 	ROM_LOAD( "seabass.nv", 0x0000, 0x0080, CRC(4e7c0944) SHA1(dbba78f6a7f3e7d12d5c4fff36117db82f5f9c01) )
 ROM_END
 
@@ -4354,6 +4086,7 @@ ROM_START( sss )
 	ROM_LOAD16_WORD_SWAP( "mpr21492.5",    0x1000000, 0x0400000, CRC(57753894) SHA1(5c51167c158443d02a53d724a5ceb73055876c06) ) /* ic5 good (was .15) */
 	ROM_LOAD16_WORD_SWAP( "mpr21493.6",    0x1400000, 0x0400000, CRC(efb2d271) SHA1(a591e48206704fbda5fef3ce69ad279da1017ed6) ) /* ic6 good (was .16) */
 
+	ROM_REGION( 0x80, REGION_USER3, 0 ) /* the EEPROM as set up at the factory */
 	ROM_LOAD( "sss.nv", 0x0000, 0x0080, CRC(3473b2f3) SHA1(6480b4b321af8ee6e967710e74f2556c17bfca97) )
 
 	/* 610-0374-107   1998     317-5042-COM   ST-V */
@@ -4439,6 +4172,7 @@ ROM_START( vmahjong )
 	ROM_LOAD16_WORD_SWAP( "mpr19614.1",    0x1800000, 0x0400000, CRC(b83b3f03) SHA1(e5a5919ee74964633eaaf4af2fe04c38604ccf16) ) /* good */
 	ROM_LOAD16_WORD_SWAP( "mpr19621.8",    0x1c00000, 0x0400000, CRC(f92616b3) SHA1(61a9dda92a86a02d027260e11b1bad3b0dda9f02) ) /* good */
 
+	ROM_REGION( 0x80, REGION_USER3, 0 ) /* the EEPROM as set up at the factory */
 	ROM_LOAD( "vmahjong.nv", 0x0000, 0x0080, CRC(4e6487f4) SHA1(d6d930ab5f21b8c4f42812d08b3ee90f2bc94081) )
 ROM_END
 
@@ -4537,8 +4271,6 @@ ROM_START( sfish2 )
 	ROM_REGION( 0x080000, REGION_CPU2, 0 ) /* SH2 code */
 	ROM_COPY( REGION_CPU1,0,0,0x080000)
 	ROM_REGION( 0x100000, REGION_CPU3, 0 ) /* 68000 code */
-	ROM_REGION( 0x100000, REGION_GFX1, 0 ) /* VDP2 GFX */
-	ROM_REGION( 0x100000, REGION_GFX2, 0 ) /* VDP1 GFX */
 
 	ROM_REGION32_BE( 0x0f00000, REGION_USER1, 0 ) /* SH2 code */
 	ROM_LOAD(             "epr18427.bin",      0x0000000, 0x0100000, CRC(3f25bec8) SHA1(43a5342b882d5aec0f35a8777cb475659f43b1c4) )
@@ -4573,8 +4305,6 @@ ROM_START( sfish2j )
 	ROM_REGION( 0x080000, REGION_CPU2, 0 ) /* SH2 code */
 	ROM_COPY( REGION_CPU1,0,0,0x080000)
 	ROM_REGION( 0x100000, REGION_CPU3, 0 ) /* 68000 code */
-	ROM_REGION( 0x100000, REGION_GFX1, 0 ) /* VDP2 GFX */
-	ROM_REGION( 0x100000, REGION_GFX2, 0 ) /* VDP1 GFX */
 
 	ROM_REGION32_BE( 0x2000000, REGION_USER1, 0 ) /* SH2 code */
 	ROM_LOAD(             "epr18344.a",      0x0000000, 0x0100000,  CRC(5a7de018) SHA1(88e0c2a9a9d4ebf699878c0aa9737af85f95ccf8) )

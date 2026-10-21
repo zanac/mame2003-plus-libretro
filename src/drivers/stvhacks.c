@@ -37,48 +37,6 @@ DRIVER_INIT( smleague )
 	init_stv();
 }
 
-/*
-
-06013AE8: MOV.L   @($D4,PC),R5
-06013AEA: MOV.L   @($D8,PC),R0
-06013AEC: MOV.W   @R5,R5
-06013AEE: MOV.L   @R0,R0
-06013AF0: AND     R10,R5
-06013AF2: TST     R0,R0
-06013AF4: BTS     $06013B00
-06013AF6: EXTS.W  R5,R5
-06013B00: EXTS.W  R5,R5
-06013B02: TST     R5,R5
-06013B04: BF      $06013B0A
-06013B06: TST     R4,R4
-06013B08: BT      $06013AE8
-
-   (loops for 375868 instructions)
-
-*/
-
-
-READ32_HANDLER( stv_speedup_r )
-{
-	if (activecpu_get_pc()==0x60154b4) cpu_spinuntil_int(); /* bios menus..*/
-
-	return stv_workram_h[0x0335d0/4];
-}
-
-READ32_HANDLER( stv_speedup2_r )
-{
-	if (activecpu_get_pc()==0x6013af0) cpu_spinuntil_int(); /* for use in japan*/
-
-	return stv_workram_h[0x0335bc/4];
-}
-
-void install_stvbios_speedups(void)
-{
-/* idle skip bios? .. not 100% sure this is safe .. we'll see */
-	install_mem_read32_handler(0, 0x60335d0, 0x60335d3, stv_speedup_r );
-	install_mem_read32_handler(0, 0x60335bc, 0x60335bf, stv_speedup2_r );
-}
-
 static READ32_HANDLER( shienryu_slave_speedup_r )
 {
  if (activecpu_get_pc()==0x06004410)
