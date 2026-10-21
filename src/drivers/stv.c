@@ -139,7 +139,6 @@ static UINT8 SCSP_reset;
 static void system_reset(void);
 static data8_t en_68k;
 /*SCU stuff*/
-static int 	  timer_0;				/* Counter for Timer 0 irq*/
 /*Maybe add these in a struct...*/
 static UINT32 scu_src_0,		/* Source DMA lv 0 address*/
 			  scu_src_1,		/* lv 1*/
@@ -2029,11 +2028,7 @@ static void stv_SMPC_w8 (int offset, UINT8 data)
 				smpc_ram[0x5d]=0xff;
 
 			/*	 //This is for RTC,cartridge code and similar stuff.../*/
-			/*	if(!(stv_scu[40] & 0x0080)) */ /*System Manager(SMPC) irq*/  /* we can't check this .. breaks controls .. probably issues elsewhere? */
-				{
-					logerror ("Interrupt: System Manager (SMPC) at scanline %04x, Vector 0x47 Level 0x08\n",scanline);
-					cpu_set_irq_line_and_vector(0, 8, HOLD_LINE , 0x47);
-				}
+				stv_scu_raise_irq(7);	/* SMPC */
 			break;
 			/* RTC write*/
 			case 0x16:
@@ -2137,66 +2132,136 @@ SCU register[40] is for IRQ masking.
 /* to do, update bios idle skips so they work better with this arrangement.. */
 
 
+/*
+SCU interrupts, as in current MAME: each source sets its bit in the status
+register (IST, also when masked), and the highest priority unmasked pending
+one is raised when no SCU interrupt is being serviced; the CPU takes it with
+the SCU's vector, which ends the service. Level per source:
+
+	bit  0 vblank-in 15, 1 vblank-out 14, 2 hblank-in 13, 3 timer 0 12,
+	     4 timer 1 11, 5 DSP end 10, 6 sound request 9, 7 SMPC 8, 8 pad 8,
+	     9 DMA level 2 6, 10 DMA level 1 6, 11 DMA level 0 5,
+	    12 DMA illegal 3, 13 VDP1 draw end 2
+
+The slave SH-2 sees the blanks on its IRL inputs: hblank-in level 2,
+vblank-out 4, vblank-in 6, 0 at the end of hblank.
+
+Timer 0 counts hblanks from vblank-out and fires on its compare value,
+timer 1 a programmable delay after each hblank (or after a timer 0 hit),
+both only while TENB is set.
+*/
+
+static UINT32 scu_ist;			/* pending sources */
+static int scu_irq_level;		/* the level being serviced, 0 if none */
+static int scu_irq_vector;
+static int scu_timer0_count;
+static int slave_irl;
+
+static const int scu_irq_levels[14] = { 15, 14, 13, 12, 11, 10, 9, 8, 8, 6, 6, 5, 3, 2 };
+
+static void scu_test_pending_irqs(void)
+{
+	UINT32 ism = stv_scu[40];
+	int i;
+
+	if (scu_irq_level != 0)
+		return;
+
+	for (i = 0; i < 14; i++)
+	{
+		if (!(ism & (1 << i)) && (scu_ist & (1 << i)))
+		{
+			scu_irq_level = scu_irq_levels[i];
+			scu_irq_vector = 0x40 + i;
+			scu_ist &= ~(1 << i);
+			cpu_set_irq_line_and_vector(0, scu_irq_level, HOLD_LINE, scu_irq_vector);
+			return;
+		}
+	}
+}
+
+void stv_scu_raise_irq(int bit)
+{
+	scu_ist |= 1 << bit;
+	scu_test_pending_irqs();
+}
+
+/* the master takes the interrupt: the service is over for the SCU */
+static int stv_master_irq_callback(int irqline)
+{
+	int vector = scu_irq_vector;
+	scu_irq_level = 0;
+	return vector;
+}
+
+static void stv_slave_irl(int level)
+{
+	if (slave_irl == level)
+		return;
+	if (slave_irl)
+		cpu_set_irq_line(1, slave_irl, CLEAR_LINE);
+	slave_irl = level;
+	if (level)
+		cpu_set_irq_line(1, level, ASSERT_LINE);
+}
+
+static void scu_timer1_cb(int param)
+{
+	stv_scu_raise_irq(4);
+}
+
+static void stv_hblank_in(int param)
+{
+	stv_slave_irl(2);
+
+	scu_ist |= 1 << 2;
+
+	if (stv_scu[38] & 1)	/* TENB */
+	{
+		int timer0_hit = scu_timer0_count == (stv_scu[36] & 0x3ff);
+		if (timer0_hit)
+			scu_ist |= 1 << 3;
+
+		/* timer 1: every line (mode 0) or after a timer 0 hit (mode 1) */
+		if (timer0_hit || !(stv_scu[38] & 0x100))
+			timer_set(TIME_IN_HZ(57272720 / 8) * (stv_scu[37] & 0x1ff), 0, scu_timer1_cb);
+	}
+	scu_timer0_count = (scu_timer0_count + 1) & 0x1ff;
+
+	scu_test_pending_irqs();
+}
+
 static INTERRUPT_GEN( stv_interrupt )
 {
-	scanline = 261-cpu_getiloops();
+	scanline = 263 - cpu_getiloops();
 
+	/* the end of the previous hblank */
+	stv_slave_irl(0);
 
-	if(scanline == 0)
+	if (scanline == 0)
 	{
-		if(!(stv_scu[40] & 2))/*VBLANK-OUT*/
-		{
-			logerror ("Interrupt: VBlank-OUT at scanline %04x, Vector 0x41 Level 0x0e\n",scanline);
-			cpu_set_irq_line_and_vector(0, 0xe, HOLD_LINE , 0x41);
-			stv_vblank = 0;
-			return;
-		}
+		/* vblank-out */
+		stv_vblank = 0;
+		stv_slave_irl(4);
+		scu_ist |= 1 << 1;
+		scu_test_pending_irqs();
+		scu_timer0_count = 0;
 	}
-	else if(scanline <= 223 && scanline >= 1)/*Correct?*/
+	else if (scanline == 224)
 	{
-		timer_0++;
-		if(timer_0 == (stv_scu[36] & 0x1ff))
-		{
-			if(!(stv_scu[40] & 8))/*Timer 0*/
-			{
-				logerror ("Interrupt: Timer 0 at scanline %04x, Vector 0x43 Level 0x0c\n",scanline);
-				cpu_set_irq_line_and_vector(0, 0xc, HOLD_LINE, 0x43 );
-				return;
-			}
-		}
-
-		/*TODO:use this *at the end* of the draw line.*/
-		if(!(stv_scu[40] & 4))/*HBLANK-IN*/
-		{
-			logerror ("Interrupt: HBlank-In at scanline %04x, Vector 0x42 Level 0x0d\n",scanline);
-			cpu_set_irq_line_and_vector(0, 0xd, HOLD_LINE , 0x42);
-		}
+		/* vblank-in */
+		stv_vblank = 1;
+		stv_slave_irl(6);
+		stv_scu_raise_irq(0);
 	}
-	else if(scanline == 224)
+	else if (scanline == 224 + 8)
 	{
-		timer_0 = 0;
-
-		if(!(stv_scu[40] & 1))/*VBLANK-IN*/
-		{
-			logerror ("Interrupt: VBlank IN at scanline %04x, Vector 0x40 Level 0x0f\n",scanline);
-			cpu_set_irq_line_and_vector(0, 0xf, HOLD_LINE , 0x40);
-			stv_vblank = 1;
-			return;
-		}
-
-		if(timer_0 == (stv_scu[36] & 0x1ff))
-		{
-			if(!(stv_scu[40] & 8))/*Timer 0*/
-			{
-				logerror ("Interrupt: Timer 0 at scanline %04x, Vector 0x43 Level 0x0c\n",scanline);
-				cpu_set_irq_line_and_vector(0, 0xc, HOLD_LINE, 0x43 );
-				return;
-			}
-		}
-
-
+		/* VDP1 draw end, 8 lines after vblank-in as in MAME */
+		stv_scu_raise_irq(13);
 	}
 
+	/* hblank-in, at the end of the visible line */
+	timer_set(TIME_IN_HZ(60 * 264) * 3 / 4, 0, stv_hblank_in);
 }
 
 /*
@@ -2491,6 +2556,8 @@ READ32_HANDLER( stv_scu_r32 )
         log_cb(RETRO_LOG_DEBUG, LOGPRE  "DSP mem read at %08X\n", stv_scu[34]);
         return dsp_ram_addr_r();
     }
+    else if ( offset == 41 )
+    	return scu_ist;
     else
     {
     	log_cb(RETRO_LOG_DEBUG, LOGPRE "SCU reg read at %d = %08x\n",offset,stv_scu[offset]);
@@ -2688,10 +2755,12 @@ WRITE32_HANDLER( stv_scu_w32 )
 			stv_scu[offset] & 0x0002 ? 1 : 0, /*VBlank-OUT*/
 			stv_scu[offset] & 0x0001 ? 1 : 0);/*VBlank-IN*/
 		}
+		scu_test_pending_irqs();
 		break;
 		case 41:
-		/*This is r/w by introdon...*/
-		log_cb(RETRO_LOG_DEBUG, LOGPRE "IRQ status reg set:%08x\n",stv_scu[41]);
+		/* writing 0 bits acknowledges pending sources */
+		scu_ist &= data | mem_mask;
+		scu_test_pending_irqs();
 		break;
 		case 42: /*A-Bus IRQ ACK*/ break;
 		case 49: /*This sets the SDRAM size*/ break;
@@ -2729,8 +2798,7 @@ static void dma_direct_lv0()
 	if(!(DWUP(0))) scu_dst_0 = tmp_dst;
 
 	log_cb(RETRO_LOG_DEBUG, LOGPRE "DMA transfer END\n");
-	if(!(stv_scu[40] & 0x800))/*Lv 0 DMA end irq*/
-		cpu_set_irq_line_and_vector(0, 5, HOLD_LINE , 0x4b);
+	stv_scu_raise_irq(11);	/* DMA level 0 end */
 
 	SET_D0MV_FROM_1_TO_0;
 }
@@ -2764,8 +2832,7 @@ static void dma_direct_lv1()
 	if(!(DWUP(1))) scu_dst_1 = tmp_dst;
 
 	log_cb(RETRO_LOG_DEBUG, LOGPRE "DMA transfer END\n");
-	if(!(stv_scu[40] & 0x400))/*Lv 1 DMA end irq*/
-		cpu_set_irq_line_and_vector(0, 6, HOLD_LINE , 0x4a);
+	stv_scu_raise_irq(10);	/* DMA level 1 end */
 
 	SET_D1MV_FROM_1_TO_0;
 }
@@ -2799,8 +2866,7 @@ static void dma_direct_lv2()
 	if(!(DWUP(2))) scu_dst_2 = tmp_dst;
 
 	log_cb(RETRO_LOG_DEBUG, LOGPRE "DMA transfer END\n");
-	if(!(stv_scu[40] & 0x200))/*Lv 2 DMA end irq*/
-		cpu_set_irq_line_and_vector(0, 6, HOLD_LINE , 0x49);
+	stv_scu_raise_irq(9);	/* DMA level 2 end */
 
 	SET_D2MV_FROM_1_TO_0;
 }
@@ -2860,8 +2926,7 @@ static void dma_indirect_lv0()
 
 	}while(job_done == 0);
 
-	if(!(stv_scu[40] & 0x800))/*Lv 0 DMA end irq*/
-		cpu_set_irq_line_and_vector(0, 5, HOLD_LINE , 0x4b);
+	stv_scu_raise_irq(11);	/* DMA level 0 end */
 
 	SET_D0MV_FROM_1_TO_0;
 }
@@ -2922,8 +2987,7 @@ static void dma_indirect_lv1()
 
 	}while(job_done == 0);
 
-	if(!(stv_scu[40] & 0x400))/*Lv 1 DMA end irq*/
-		cpu_set_irq_line_and_vector(0, 6, HOLD_LINE , 0x4a);
+	stv_scu_raise_irq(10);	/* DMA level 1 end */
 
 	SET_D1MV_FROM_1_TO_0;
 }
@@ -2983,8 +3047,7 @@ static void dma_indirect_lv2()
 
 	}while(job_done == 0);
 
-	if(!(stv_scu[40] & 0x200))/*Lv 2 DMA end irq*/
-		cpu_set_irq_line_and_vector(0, 6, HOLD_LINE , 0x49);
+	stv_scu_raise_irq(9);	/* DMA level 2 end */
 
 	SET_D2MV_FROM_1_TO_0;
 }
@@ -3591,7 +3654,12 @@ MACHINE_INIT( stv )
 	cpu_set_halt_line(1, ASSERT_LINE);
 	cpu_set_halt_line(2, ASSERT_LINE);
 
-	timer_0 = 0;
+	scu_ist = 0;
+	scu_irq_level = 0;
+	scu_irq_vector = 0;
+	scu_timer0_count = 0;
+	slave_irl = 0;
+	cpu_set_irq_callback(0, stv_master_irq_callback);
 	en_68k = 0;
 	smpc_ram[0x21] = 0x80;
 

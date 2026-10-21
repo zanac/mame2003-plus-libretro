@@ -270,8 +270,8 @@ void dsp_prg_ctrl(UINT32 data)
 {
 	if(LEF) dsp_reg.pc = (data & 0xff);
 	if(EXF) dsp_execute_program();
-	if(EF && (!(stv_scu[40] & 0x0020)))
-		cpu_set_irq_line_and_vector(0, 0xa, HOLD_LINE , 0x45);
+	if(EF)
+		stv_scu_raise_irq(5);	/* DSP end */
 }
 
 void dsp_prg_data(UINT32 data)
