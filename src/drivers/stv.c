@@ -96,6 +96,7 @@ Preliminary Memory map:
 #include "cpu/sh2/sh2.h"
 #include "machine/stvcd.h"
 #include "machine/scudsp.h"
+#include "machine/sega315_5881.h"
 #include <time.h>
 
 extern data32_t* stv_vdp2_regs;
@@ -3519,6 +3520,11 @@ WRITE32_HANDLER ( w60ffc48_write )
 }
 
 
+static READ32_HANDLER( stv_cart_unmapped_r )
+{
+	return 0xffffffff;
+}
+
 DRIVER_INIT ( stv )
 {
 	unsigned char *ROM = memory_region(REGION_USER1);
@@ -3545,6 +3551,15 @@ DRIVER_INIT ( stv )
 	cpu_setbank(5,&stv_backupram[0x000000]);
 
 	install_stvbios_speedups();
+
+	/* the cartridge space is 0x02000000-0x04ffffff; past the ROMs it reads
+	   as erased flash (MAME's carts are 0x3000000 bytes, 0xff filled) */
+	if (memory_region_length(REGION_USER1) < 0x3000000)
+	{
+		offs_t end = 0x02000000 + memory_region_length(REGION_USER1);
+		install_mem_read32_handler(0, end, 0x04ffffff, stv_cart_unmapped_r);
+		install_mem_read32_handler(1, end, 0x04ffffff, stv_cart_unmapped_r);
+	}
 
 	/* debug .. watch the command buffer rsgun, cottonbm etc. appear to use to communicate between cpus */
 	install_mem_write32_handler(0, 0x60ffc44, 0x60ffc47, w60ffc44_write );
@@ -4170,8 +4185,6 @@ ROM_START( rsgun )
 	ROM_LOAD16_WORD_SWAP( "mpr20960.3",   0x0800000, 0x0400000, CRC(b5ab9053) SHA1(87c5d077eb1219c35fa65b4e11d5b62e826f5236) ) /* good (was .13)*/
 	ROM_LOAD16_WORD_SWAP( "mpr20961.4",   0x0c00000, 0x0400000, CRC(0e06295c) SHA1(0ec2842622f3e9dc5689abd58aeddc7e5603b97a) ) /* good (was .14)*/
 	ROM_LOAD16_WORD_SWAP( "mpr20962.5",   0x1000000, 0x0400000, CRC(f1e6c7fc) SHA1(0ba0972f1bc7c56f4e0589d3e363523cea988bb0) ) /* good (was .15)*/
-	/*Without the following the game crashes,maybe we need to mirror the previous roms in this location?*/
-	ROM_FILL(                             0x1400000, 0x0c00000, 0x00 )
 ROM_END
 
 ROM_START( sandor )
@@ -4529,6 +4542,89 @@ ROM_END
 
 
 
+/***************************************************************************
+    A-Bus protection: the 315-5881 decrypter/decompresser of the protected
+    carts, at the top of the cartridge space (0x04fffff0-0x04ffffff)
+***************************************************************************/
+
+static data32_t stv_abus[4];
+static data32_t stv_abus_protenable, stv_abus_protkey;
+
+static data32_t stv_cart_word32(offs_t byteoffs)
+{
+	if (byteoffs + 4 > memory_region_length(REGION_USER1))
+		return 0xffffffff;
+	return ((data32_t *)memory_region(REGION_USER1))[byteoffs / 4];
+}
+
+/* the cart ROM as 16-bit words, bytes swapped (as the decrypter sees them) */
+static UINT16 stv_crypt_read(UINT32 addr)
+{
+	data32_t w = stv_cart_word32((2 * addr) & ~3);
+	UINT16 dat = (addr & 1) ? (w & 0xffff) : (w >> 16);
+	return ((dat & 0xff00) >> 8) | ((dat & 0x00ff) << 8);
+}
+
+static READ32_HANDLER( stv_common_prot_r )
+{
+	if (stv_abus_protenable & 0x00010000)	/* protection calculation active */
+	{
+		if (offset == 3)
+		{
+			UINT16 res = sega315_5881_do_decrypt();
+			UINT16 res2 = sega315_5881_do_decrypt();
+			res = ((res & 0xff00) >> 8) | ((res & 0x00ff) << 8);
+			res2 = ((res2 & 0xff00) >> 8) | ((res2 & 0x00ff) << 8);
+			return res2 | (res << 16);
+		}
+		return stv_abus[offset];
+	}
+	if (stv_abus[offset] != 0)
+		return stv_abus[offset];
+	return stv_cart_word32(0x02fffff0 + offset * 4);
+}
+
+static WRITE32_HANDLER( stv_common_prot_w )
+{
+	COMBINE_DATA(&stv_abus[offset]);
+
+	if (offset == 0)
+		COMBINE_DATA(&stv_abus_protenable);
+	else if (offset == 2)
+	{
+		if (!(mem_mask & 0xffff0000)) sega315_5881_set_addr_low(data >> 16);
+		if (!(mem_mask & 0x0000ffff)) sega315_5881_set_addr_high(data & 0xffff);
+	}
+	else if (offset == 3)
+	{
+		COMBINE_DATA(&stv_abus_protkey);
+		sega315_5881_set_subkey(stv_abus_protkey >> 16);
+	}
+}
+
+static void stv_install_common_protection(UINT32 key)
+{
+	install_mem_read32_handler(0, 0x04fffff0, 0x04ffffff, stv_common_prot_r);
+	install_mem_write32_handler(0, 0x04fffff0, 0x04ffffff, stv_common_prot_w);
+
+	memset(stv_abus, 0, sizeof(stv_abus));
+	stv_abus_protenable = stv_abus_protkey = 0;
+	sega315_5881_init(key, stv_crypt_read);
+	sega315_5881_reset();
+
+	state_save_register_UINT32("stv_abus", 0, "abus", stv_abus, 4);
+	state_save_register_UINT32("stv_abus", 0, "protenable", &stv_abus_protenable, 1);
+	state_save_register_UINT32("stv_abus", 0, "protkey", &stv_abus_protkey, 1);
+}
+
+/* the protected carts; the keys are MAME's */
+static DRIVER_INIT( rsgun )    { init_stv();  stv_install_common_protection(0x05272d01); }
+static DRIVER_INIT( ffreveng ) { init_stv();  stv_install_common_protection(0x0524ac01); }
+static DRIVER_INIT( elandore ) { init_stv();  stv_install_common_protection(0x05226d41); }
+static DRIVER_INIT( astrass )  { init_ic13(); stv_install_common_protection(0x052e2901); }
+static DRIVER_INIT( sss )      { init_ic13(); stv_install_common_protection(0x052b6901); }
+static DRIVER_INIT( twcup98 )  { init_ic13(); stv_install_common_protection(0x05200913); }
+
 DRIVER_INIT( sfish2 )
 {
 	/* this is WRONG but works for some games */
@@ -4582,9 +4678,9 @@ GAMEBX( 1996, groovef,   stvbios, stvbios, stv, stv,  stv,       ROT0, "Atlus", 
 GAMEBX( 1999, danchih,   stvbios, stvbios, stv, stvmp,stv,       ROT0, "Altron (Tecmo license)", "Danchi de Hanafuda", GAME_NO_SOUND | GAME_NOT_WORKING, &generic_ctrl, NULL )
 GAMEBX( 1996, diehard,   stvbios, stvbios, stv, stv,  ic13,      ROT0,   "Sega", 	 "Die Hard Arcade (US)", GAME_IMPERFECT_SOUND | GAME_IMPERFECT_GRAPHICS, &generic_ctrl, NULL )
 GAMEBX( 1998, grdforce,  stvbios, stvbios, stv, stv,  stv,       ROT0, "Success",    "Guardian Force", GAME_IMPERFECT_GRAPHICS | GAME_IMPERFECT_SOUND, &generic_ctrl, NULL )
-GAMEBX( 1998, elandore,  stvbios, stvbios, stv, stv,  stv,       ROT0, "Sai-Mate",   "Fighting Dragon Legend Elan Doree", GAME_NO_SOUND | GAME_NOT_WORKING, &generic_ctrl, NULL )
+GAMEBX( 1998, elandore,  stvbios, stvbios, stv, stv,  elandore,       ROT0, "Sai-Mate",   "Fighting Dragon Legend Elan Doree", GAME_NO_SOUND | GAME_NOT_WORKING, &generic_ctrl, NULL )
 GAMEBX( 1998, myfairld,  stvbios, stvbios, stv, stvmp,stv,       ROT0, "Micronet",   "Virtual Mahjong 2 - My Fair Lady", GAME_NO_SOUND | GAME_NOT_WORKING, &generic_ctrl, NULL )
-GAMEBX( 1998, rsgun,     stvbios, stvbios, stv, stv,  stv,       ROT0, "Treasure",   "Radiant Silvergun", GAME_NO_SOUND | GAME_NOT_WORKING, &generic_ctrl, NULL )
+GAMEBX( 1998, rsgun,     stvbios, stvbios, stv, stv,  rsgun,       ROT0, "Treasure",   "Radiant Silvergun", GAME_NO_SOUND | GAME_NOT_WORKING, &generic_ctrl, NULL )
 GAMEBX( 1996, sassisu,   stvbios, stvbios, stv, stv,  ic13,      ROT0, "Sega", 	     "Taisen Tanto-R Sashissu!!", GAME_NO_SOUND | GAME_NOT_WORKING, &generic_ctrl, NULL )
 GAMEBX( 1995, sleague,   stvbios, stvbios, stv, stv,  ic13,      ROT0, "Sega", 	     "Super Major League (US)", GAME_NO_SOUND | GAME_NOT_WORKING, &generic_ctrl, NULL )
 GAMEBX( 1995, finlarch,  sleague, stvbios, stv, stv,  ic13,      ROT0, "Sega", 	     "Final Arch (Japan)", GAME_NO_SOUND | GAME_NOT_WORKING, &generic_ctrl, NULL )
@@ -4599,10 +4695,10 @@ GAMEBX( 1995, vfremix,   stvbios, stvbios, stv, stv,  ic13,      ROT0, "Sega", 	
 
 GAMEBX( 1996, stvbios,   0,       stvbios, stv, stv,  stv,       ROT0, "Sega",       "ST-V Bios", NOT_A_DRIVER, &generic_ctrl, NULL )
 
-GAMEBX( 1998, astrass,   stvbios, stvbios, stv, stv,  ic13,      ROT0, "Sunsoft",    "Astra SuperStars", GAME_NO_SOUND | GAME_NOT_WORKING, &generic_ctrl, NULL )
+GAMEBX( 1998, astrass,   stvbios, stvbios, stv, stv,  astrass,      ROT0, "Sunsoft",    "Astra SuperStars", GAME_NO_SOUND | GAME_NOT_WORKING, &generic_ctrl, NULL )
 GAMEBX( 1996, batmanfr,  stvbios, stvbios, stv, stv,  ic13,      ROT0, "Acclaim",    "Batman Forever", GAME_NO_SOUND | GAME_NOT_WORKING, &generic_ctrl, NULL )
 GAMEBX( 1995, decathlt,  stvbios, stvbios, stv, stv,  ic13,      ROT0, "Sega", 	     "Decathlete", GAME_NO_SOUND | GAME_NOT_WORKING, &generic_ctrl, NULL )
-GAMEBX( 1999, ffreveng,  stvbios, stvbios, stv, stv,  stv,       ROT0, "Capcom",     "Final Fight Revenge", GAME_UNEMULATED_PROTECTION | GAME_NO_SOUND | GAME_NOT_WORKING, &generic_ctrl, NULL )
+GAMEBX( 1999, ffreveng,  stvbios, stvbios, stv, stv,  ffreveng,       ROT0, "Capcom",     "Final Fight Revenge", GAME_UNEMULATED_PROTECTION | GAME_NO_SOUND | GAME_NOT_WORKING, &generic_ctrl, NULL )
 GAMEBX( 1996, findlove,  stvbios, stvbios, stv, stv,  ic13,      ROT0, "Daiki",	     "Find Love", GAME_NO_SOUND | GAME_NOT_WORKING, &generic_ctrl, NULL )
 GAMEBX( 1994, gaxeduel,  stvbios, stvbios, stv, stv,  ic13,      ROT0, "Sega", 	     "Golden Axe - The Duel", GAME_NO_SOUND | GAME_NOT_WORKING, &generic_ctrl, NULL )
 GAMEBX( 1996, introdon,  stvbios, stvbios, stv, stv,  ic13,      ROT0, "Sunsoft / Success", "Karaoke Quiz Intro Don Don!", GAME_NO_SOUND | GAME_NOT_WORKING, &generic_ctrl, NULL )
@@ -4612,8 +4708,8 @@ GAMEBX( 1995, sandor,    stvbios, stvbios, stv, stv,  ic13,      ROT0, "Sega", 	
 GAMEBX( 1995, thunt,     sandor,  stvbios, stv, stv,  ic13,      ROT0, "Sega", 	     "Treasure Hunt", GAME_NO_SOUND | GAME_NOT_WORKING, &generic_ctrl, NULL ) /* this one actually does something if you use the sandor gfx*/
 GAMEBX( 1998, seabass,   stvbios, stvbios, stv, stv,  ic13,      ROT0, "A Wave inc. (Able license)", "Sea Bass Fishing", GAME_NO_SOUND | GAME_NOT_WORKING, &generic_ctrl, NULL )
 GAMEBX( 1996, sokyugrt,  stvbios, stvbios, stv, stv,  ic13,      ROT0, "Raizing",    "Soukyugurentai - Terra Diver", GAME_NO_SOUND | GAME_NOT_WORKING, &generic_ctrl, NULL )
-GAMEBX( 1998, sss,       stvbios, stvbios, stv, stv,  ic13,      ROT0, "Victor / Cave / Capcom", "Steep Slope Sliders", GAME_NO_SOUND | GAME_NOT_WORKING, &generic_ctrl, NULL )
-GAMEBX( 1998, twcup98,   stvbios, stvbios, stv, stv,  ic13,      ROT0, "Tecmo",      "Tecmo World Cup '98", GAME_NO_SOUND | GAME_NOT_WORKING, &generic_ctrl, NULL ) /* protected?*/
+GAMEBX( 1998, sss,       stvbios, stvbios, stv, stv,  sss,      ROT0, "Victor / Cave / Capcom", "Steep Slope Sliders", GAME_NO_SOUND | GAME_NOT_WORKING, &generic_ctrl, NULL )
+GAMEBX( 1998, twcup98,   stvbios, stvbios, stv, stv,  twcup98,      ROT0, "Tecmo",      "Tecmo World Cup '98", GAME_NO_SOUND | GAME_NOT_WORKING, &generic_ctrl, NULL ) /* protected?*/
 GAMEBX( 1997, vmahjong,  stvbios, stvbios, stv, stvmp,stv,       ROT0, "Micronet",   "Virtual Mahjong", GAME_NO_SOUND | GAME_NOT_WORKING, &generic_ctrl, NULL )
 GAMEBX( 1997, znpwfv,    stvbios, stvbios, stv, stv,  ic13,      ROT0, "Sega", 	     "Zen Nippon Pro-Wrestling Featuring Virtua", GAME_NO_SOUND | GAME_NOT_WORKING, &generic_ctrl, NULL )
 
