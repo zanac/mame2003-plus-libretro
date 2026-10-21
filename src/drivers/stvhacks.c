@@ -9,15 +9,10 @@ to be honest i think some of these cause more problems than they're worth ...
 extern data32_t *stv_workram_h;
 DRIVER_INIT ( stv );
 
-/* Hack the boot vectors .. not right but allows several IC13 games (which fail the checksums before hacking) to boot */
+/* the IC13 carts: their program ROM is now loaded as MAME loads it (odd
+   bytes, mirrored), so they need no boot vector patch */
 DRIVER_INIT( ic13 )
 {
-	/* this is WRONG but works for some games */
-	data32_t *rom = (data32_t *)memory_region(REGION_USER1);
-	rom[0xf10/4] = (rom[0xf10/4] & 0xff000000)|((rom[0xf10/4]/2)&0x00ffffff);
-	rom[0xf20/4] = (rom[0xf20/4] & 0xff000000)|((rom[0xf20/4]/2)&0x00ffffff);
-	rom[0xf30/4] = (rom[0xf30/4] & 0xff000000)|((rom[0xf30/4]/2)&0x00ffffff);
-
 	init_stv();
 }
 
