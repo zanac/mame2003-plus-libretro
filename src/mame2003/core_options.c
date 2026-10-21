@@ -330,6 +330,24 @@ static struct retro_core_option_v2_definition option_def_neogeo_bios = {
    "default"
 };
 
+/* ST-V games that check the BIOS region and only run with one (as MAME's
+   default BIOS for them) */
+static const char *stv_required_bios(const char *name)
+{
+  static const char *const games[][2] = {
+    { "diehard",  "us" },
+    { "smleague", "us" },
+    { "znpwfvt",  "taiwan" },
+    { "critcrsh", "europe" },
+    { "tatacot",  "japan" },
+  };
+  size_t i;
+  for (i = 0; i < sizeof(games) / sizeof(games[0]); i++)
+    if (strcmp(name, games[i][0]) == 0)
+      return games[i][1];
+  return NULL;
+}
+
 static struct retro_core_option_v2_definition option_def_stv_bios = {
    APPNAME"_stv_bios",
    "Specify Sega ST-V BIOS",
@@ -1133,8 +1151,8 @@ void update_variables(bool first_time)
         case OPT_STV_BIOS:
           if(!options.content_flags[CONTENT_STV])
             break;
-          if(options.content_flags[CONTENT_DIEHARD]) /* catch required bios for this one game. */
-            options.bios = "us";
+          if(stv_required_bios(game_driver->name)) /* a game that only runs with one region's BIOS */
+            options.bios = stv_required_bios(game_driver->name);
           else
             options.bios = (strcmp(var.value, "default") == 0) ? NULL : var.value;
           break;
@@ -1427,10 +1445,6 @@ void set_content_flags(void)
     options.content_flags[CONTENT_MIPS_DYNAREC] = true;
 #endif
 
-  /************ DIE HARD: ARCADE ************/
-  if(strcasecmp(game_driver->name, "diehard") == 0)
-    options.content_flags[CONTENT_DIEHARD] = true;
-
   /************ DRIVERS WITH VECTOR VIDEO DISPLAYS ************/
   if(Machine->drv->video_attributes & VIDEO_TYPE_VECTOR)
     options.content_flags[CONTENT_VECTOR] = true;
@@ -1592,7 +1606,8 @@ void set_content_flags(void)
 
   if(options.content_flags[CONTENT_NEOGEO])     log_cb(RETRO_LOG_INFO, LOGPRE "* Neo Geo BIOS required.\n");
   if(options.content_flags[CONTENT_STV])        log_cb(RETRO_LOG_INFO, LOGPRE "* STV BIOS required.\n");
-  if(options.content_flags[CONTENT_DIEHARD])    log_cb(RETRO_LOG_INFO, LOGPRE "* Die Hard: Arcade BIOS required.\n");
+  if(options.content_flags[CONTENT_STV] && stv_required_bios(game_driver->name))
+    log_cb(RETRO_LOG_INFO, LOGPRE "* ST-V BIOS forced: %s.\n", stv_required_bios(game_driver->name));
   if(options.content_flags[CONTENT_ALT_SOUND])  log_cb(RETRO_LOG_INFO, LOGPRE "* Alternative soundtrack available.\n");
   if(options.content_flags[CONTENT_VECTOR])     log_cb(RETRO_LOG_INFO, LOGPRE "* Vector display.\n");
 
