@@ -550,7 +550,12 @@ static void BEF_0(void) { vdp1_regs[0x010/2] &= ~0x0001; }
 
 
 
+/* bumped at each screen update, see vdp2_get_window0_coordinates */
+static int vdp2_window_cache_gen;
+
 /* prototypes */
+static void vdp2_get_window0_coordinates_calc(int *s_x, int *e_x, int *s_y, int *e_y, int y);
+static void vdp2_get_window1_coordinates_calc(int *s_x, int *e_x, int *s_y, int *e_y, int y);
 static UINT16 vdp1_regs_r(offs_t offset);
 static void vdp1_clear_framebuffer( int which_framebuffer );
 static void vdp1_prepare_framebuffers(void);
@@ -635,9 +640,9 @@ static void vdp2_regs_w(offs_t offset, UINT16 data, UINT16 mem_mask);
 static void vdp2_state_save_postload(void);
 static int vdp2_start(void);
 static void vdp2_fade_effects(void);
-static void vdp2_get_window0_coordinates(int *s_x, int *e_x, int *s_y, int *e_y, int y);
-static void vdp2_get_window1_coordinates(int *s_x, int *e_x, int *s_y, int *e_y, int y);
-static int get_window_pixel(int s_x,int e_x,int s_y,int e_y,int x, int y,UINT8 win_num);
+static INLINE void vdp2_get_window0_coordinates(int *s_x, int *e_x, int *s_y, int *e_y, int y);
+static INLINE void vdp2_get_window1_coordinates(int *s_x, int *e_x, int *s_y, int *e_y, int y);
+static INLINE int get_window_pixel(int s_x,int e_x,int s_y,int e_y,int x, int y,UINT8 win_num);
 static INLINE int vdp2_window_process(int x,int y);
 static int vdp2_apply_window_on_layer(struct rectangle *cliprect);
 static void draw_sprites(struct mame_bitmap *bitmap, const struct rectangle *cliprect, UINT8 pri);
@@ -8507,20 +8512,23 @@ static void vdp2_draw_back(struct mame_bitmap *bitmap, const struct rectangle *c
 		for(y=cliprect->min_y;y<=cliprect->max_y;y++)
 		{
 			UINT32 base_offs = ((VDP2_BKTA ) & base_mask) << 1;
+			UINT16 dot;
+			int r, g, b;
+			UINT32 pix, *line = BMP32(bitmap, y);
+
+			/* the back screen is one colour per line */
 			if(VDP2_BKCLMD)
 				base_offs += ((y / interlace) << 1);
+			dot = (gfxdata[base_offs+0]<<8)|gfxdata[base_offs+1];
+			b = pal5bit((dot & 0x7c00) >> 10);
+			g = pal5bit((dot & 0x03e0) >> 5);
+			r = pal5bit( dot & 0x001f);
+			if(VDP2_BKCOEN)
+				vdp2_compute_color_offset( &r, &g, &b, VDP2_BKCOSL );
+			pix = RGB_MAKE(r, g, b);
 
 			for(x=cliprect->min_x;x<=cliprect->max_x;x++)
-			{
-				UINT16 dot = (gfxdata[base_offs+0]<<8)|gfxdata[base_offs+1];
-				int b = pal5bit((dot & 0x7c00) >> 10);
-				int g = pal5bit((dot & 0x03e0) >> 5);
-				int r = pal5bit( dot & 0x001f);
-				if(VDP2_BKCOEN)
-					vdp2_compute_color_offset( &r, &g, &b, VDP2_BKCOSL );
-
-				BMP32(bitmap, y)[x] = RGB_MAKE(r, g, b);
-			}
+				line[x] = pix;
 		}
 	}
 }
@@ -8841,7 +8849,7 @@ static void vdp2_fade_effects(void)
 	/*popmessage("%04x %04x %04x %04x %04x %04x",VDP2_COAR,VDP2_COAG,VDP2_COAB,VDP2_COBR,VDP2_COBG,VDP2_COBB); */
 }
 
-static void vdp2_get_window0_coordinates(int *s_x, int *e_x, int *s_y, int *e_y, int y)
+static void vdp2_get_window0_coordinates_calc(int *s_x, int *e_x, int *s_y, int *e_y, int y)
 {
 	/*W0*/
 	switch(get_lsmd())
@@ -8901,7 +8909,21 @@ static void vdp2_get_window0_coordinates(int *s_x, int *e_x, int *s_y, int *e_y,
 	}
 }
 
-static void vdp2_get_window1_coordinates(int *s_x, int *e_x, int *s_y, int *e_y, int y)
+/* the window of a line doesn't change during a screen update, but the rotation
+   screens ask for it on every pixel */
+static INLINE void vdp2_get_window0_coordinates(int *s_x, int *e_x, int *s_y, int *e_y, int y)
+{
+	static int cache_gen = -1, cache_y, c_sx, c_ex, c_sy, c_ey;
+	if (cache_gen != vdp2_window_cache_gen || cache_y != y)
+	{
+		vdp2_get_window0_coordinates_calc(&c_sx, &c_ex, &c_sy, &c_ey, y);
+		cache_gen = vdp2_window_cache_gen;
+		cache_y = y;
+	}
+	*s_x = c_sx; *e_x = c_ex; *s_y = c_sy; *e_y = c_ey;
+}
+
+static void vdp2_get_window1_coordinates_calc(int *s_x, int *e_x, int *s_y, int *e_y, int y)
 {
 	/*W1*/
 	switch(get_lsmd())
@@ -8961,7 +8983,21 @@ static void vdp2_get_window1_coordinates(int *s_x, int *e_x, int *s_y, int *e_y,
 	}
 }
 
-static int get_window_pixel(int s_x,int e_x,int s_y,int e_y,int x, int y,UINT8 win_num)
+/* the window of a line doesn't change during a screen update, but the rotation
+   screens ask for it on every pixel */
+static INLINE void vdp2_get_window1_coordinates(int *s_x, int *e_x, int *s_y, int *e_y, int y)
+{
+	static int cache_gen = -1, cache_y, c_sx, c_ex, c_sy, c_ey;
+	if (cache_gen != vdp2_window_cache_gen || cache_y != y)
+	{
+		vdp2_get_window1_coordinates_calc(&c_sx, &c_ex, &c_sy, &c_ey, y);
+		cache_gen = vdp2_window_cache_gen;
+		cache_y = y;
+	}
+	*s_x = c_sx; *e_x = c_ex; *s_y = c_sy; *e_y = c_ey;
+}
+
+static INLINE int get_window_pixel(int s_x,int e_x,int s_y,int e_y,int x, int y,UINT8 win_num)
 {
 	int res;
 
@@ -8980,17 +9016,23 @@ static int get_window_pixel(int s_x,int e_x,int s_y,int e_y,int x, int y,UINT8 w
 static INLINE int vdp2_window_process(int x,int y)
 {
 	int s_x=0,e_x=0,s_y=0,e_y=0;
-	int w0_pix, w1_pix;
+	int w0_pix = 1, w1_pix = 1;
 
 	if (current_tilemap.window_control.enabled[0] == 0 &&
 		current_tilemap.window_control.enabled[1] == 0)
 		return 1;
 
-	vdp2_get_window0_coordinates(&s_x, &e_x, &s_y, &e_y, y);
-	w0_pix = get_window_pixel(s_x,e_x,s_y,e_y,x,y,0);
-
-	vdp2_get_window1_coordinates(&s_x, &e_x, &s_y, &e_y, y);
-	w1_pix = get_window_pixel(s_x,e_x,s_y,e_y,x,y,1);
+	/* a disabled window counts as 1, as in get_window_pixel() */
+	if (current_tilemap.window_control.enabled[0])
+	{
+		vdp2_get_window0_coordinates(&s_x, &e_x, &s_y, &e_y, y);
+		w0_pix = get_window_pixel(s_x,e_x,s_y,e_y,x,y,0);
+	}
+	if (current_tilemap.window_control.enabled[1])
+	{
+		vdp2_get_window1_coordinates(&s_x, &e_x, &s_y, &e_y, y);
+		w1_pix = get_window_pixel(s_x,e_x,s_y,e_y,x,y,1);
+	}
 
 	return current_tilemap.window_control.logic & 1 ? (w0_pix | w1_pix) : (w0_pix & w1_pix);
 }
@@ -9591,6 +9633,7 @@ static void draw_sprites(struct mame_bitmap *bitmap, const struct rectangle *cli
 /* the VDP2 screen, drawn at the end of the active display as MAME does */
 static void vdp2_render(struct mame_bitmap *bitmap, const struct rectangle *cliprect)
 {
+	vdp2_window_cache_gen++;
 	vdp2_fade_effects();
 
 	vdp2_draw_back(bitmap,cliprect);
