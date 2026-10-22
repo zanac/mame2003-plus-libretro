@@ -75,10 +75,13 @@ extern data32_t* stv_scu;
 static UINT32 opcode;
 static UINT8 update_mul = 0;
 
-#define DEBUG_DSP
+/* writes dsp.log in the current directory, for debugging only */
+/*#define DEBUG_DSP*/
 
+#ifdef DEBUG_DSP
 static	char dasm_buffer[100];
 static FILE *log_file = NULL;
+#endif
 void dsp_dasm_opcode( UINT32 op, char *buffer );
 
 
@@ -698,6 +701,7 @@ static void dsp_loop( void )
 	}
 }
 
+#ifdef DEBUG_DSP
 static void dsp_dump_mem( FILE *f )
 {
     UINT16 i;
@@ -724,12 +728,15 @@ static void dsp_dump_mem( FILE *f )
 	}
 	fprintf( f, "}\n" );
 }
+#endif
 
 void dsp_execute_program()
 {
 	UINT32 cycles_run = 0;
 	UINT8 cont = 1;
+#ifdef DEBUG_DSP
 	UINT16 i;
+#endif
 
 #ifdef DEBUG_DSP
     if ( log_file == NULL )
@@ -758,7 +765,9 @@ void dsp_execute_program()
 			dsp_reg.pc++;
 		}
 
+#ifdef DEBUG_DSP
 		dsp_dasm_opcode( opcode, dasm_buffer );
+#endif
 
 		switch( (opcode & 0xc0000000) >> 30 ) 
 		{
