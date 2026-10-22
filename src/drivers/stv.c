@@ -2870,10 +2870,17 @@ static WRITE32_HANDLER( stv_scsp_regs_w32 )
 /*
 MINIT / SINIT: one SH-2 pulses the FRT input capture of the other (the DCC,
 315-5778). As in MAME, the pulse happens once the CPUs are in sync, and the
-interleave is tight (32 SCU clocks, about 16 SH-2 cycles) for 1666us after it:
-the two CPUs exchange their jobs through the work RAM right after.
+interleave is tight for 1666us after it: the two CPUs exchange their jobs
+through the work RAM right after. Slices of 2us (about 56 SH-2 cycles) give
+the same output as 32 SCU clocks (about 16 cycles) on all the sets for 3600
+frames but vfremix (a fighter of its attract mode comes in a few frames
+earlier, it keeps 32 SCU clocks), while the games that signal often (colmns97, ffreveng, elandore,
+supgoal, ...) spend most of their time in that window: it takes a quarter
+to a third less host time. Communication breaks from 10us slices (7us for
+twcup98), MAME 0.264 uses 5us to 50us depending on the game.
 */
-#define STV_INIT_SLICE		TIME_IN_HZ(57272720 / 32)
+#define STV_INIT_SLICE		TIME_IN_USEC(2)
+#define STV_INIT_SLICE_SCU	TIME_IN_HZ(57272720 / 32)
 static double stv_init_slice;
 
 static void stv_frt_pulse(int cpu)
@@ -3744,15 +3751,15 @@ MACHINE_INIT( stv )
 	sinit_boost = 1666;
 	stv_init_slice = STV_INIT_SLICE;
 
-	/* twcup98 computes on both CPUs for most of that window: it needs
-	   much less (MAME 0.264 gives it 400us of 5us slices, it locks up
-	   from 7us), and runs a third faster with 400us of 2us slices */
+	/* twcup98 computes on both CPUs for most of that window: 400us is
+	   enough for it (as in MAME 0.264), same output, a tenth faster */
 	if (!strcmp(Machine->gamedrv->name, "twcup98"))
 	{
 		minit_boost = 400;
 		sinit_boost = 400;
-		stv_init_slice = TIME_IN_USEC(2);
 	}
+	if (!strcmp(Machine->gamedrv->name, "vfremix"))
+		stv_init_slice = STV_INIT_SLICE_SCU;
 
 	/* puyosun doesn't seem to care */
 	if ((!strcmp(Machine->gamedrv->name,"puyosun")) ||
