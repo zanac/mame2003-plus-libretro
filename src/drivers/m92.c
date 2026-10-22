@@ -110,13 +110,13 @@ static int irqvector;
 static int sound_status;
 static int bankaddress;
 
-static int m92_irq_vectorbase;
 static unsigned char *m92_ram,*m92_snd_ram;
 
-#define M92_IRQ_0 ((m92_irq_vectorbase+0)/4)  /* VBL interrupt*/
-#define M92_IRQ_1 ((m92_irq_vectorbase+4)/4)  /* Sprite buffer complete interrupt */
-#define M92_IRQ_2 ((m92_irq_vectorbase+8)/4)  /* Raster interrupt */
-#define M92_IRQ_3 ((m92_irq_vectorbase+12)/4) /* Sound cpu interrupt */
+/* Inputs of the interrupt controller (uPD71059, an 8259A compatible PIC) */
+#define M92_IRQ_VBL     0   /* VBL interrupt */
+#define M92_IRQ_SPRITE  1   /* Sprite buffer complete interrupt */
+#define M92_IRQ_RASTER  2   /* Raster interrupt */
+#define M92_IRQ_SOUND   3   /* Sound cpu interrupt */
 
 #define M92_SCANLINES	256
 
@@ -139,6 +139,310 @@ extern int m92_raster_irq_position,m92_raster_enable;
 extern unsigned char *m92_vram_data,*m92_spritecontrol;
 
 extern int m92_sprite_buffer_busy,m92_game_kludge;
+
+/*****************************************************************************
+
+	Interrupt controller
+
+	The main CPU interrupts go through a uPD71059, an 8259A compatible PIC.
+	The games program it at boot (on all the games tested: edge triggered,
+	single PIC, x86 mode, automatic end of interrupt), and the vector base
+	they write in ICW2 is the one the CPU gets. It latches each request
+	until the CPU takes it, gives the requests their priority (VBL first,
+	then sprite DMA, raster and sound), and a request is withdrawn when its
+	input goes low before the CPU takes it.
+
+	Only the single PIC, x86 mode is emulated (no cascade, no 8080 mode),
+	following the pic8259 device of current MAME.
+
+*****************************************************************************/
+
+enum { PIC_ICW1 = 0, PIC_ICW2, PIC_ICW3, PIC_ICW4, PIC_READY };
+
+static UINT8 pic_state, pic_isr, pic_irr, pic_prio, pic_imr, pic_irq_lines, pic_ocw3;
+static UINT8 pic_level_trig_mode, pic_cascade, pic_icw4_needed, pic_base, pic_auto_eoi;
+static INT32 pic_current_level;
+static INT32 pic_int_out;	/* state of the PIC output, as last sent to the CPU */
+
+static void pic_set_int_out(int state)
+{
+	if (state != pic_int_out)
+	{
+		pic_int_out = state;
+		cpu_set_irq_line(0, 0, state ? ASSERT_LINE : CLEAR_LINE);
+	}
+}
+
+/* find the request to send to the CPU, if any */
+static void pic_update(void)
+{
+	int n, irq;
+
+	for (n = 0, irq = pic_prio; n < 8; n++, irq = (irq + 1) & 7)
+	{
+		UINT8 mask = 1 << irq;
+
+		/* a request of higher priority is in service */
+		if (pic_isr & mask)
+			break;
+
+		/* is this request pending and enabled? */
+		if (pic_state == PIC_READY && (pic_irr & mask) && !(pic_imr & mask))
+		{
+			pic_current_level = irq;
+			pic_set_int_out(1);
+			return;
+		}
+	}
+
+	pic_current_level = -1;
+	pic_set_int_out(0);
+}
+
+static void pic_set_irq_line(int irq, int state)
+{
+	UINT8 mask = 1 << irq;
+
+	if (state)
+	{
+		/* in edge triggered mode, only a rising edge makes a request */
+		if (pic_level_trig_mode || !(pic_irq_lines & mask))
+		{
+			pic_irr |= mask;
+
+			/* The idle loop speedups suspend the CPU until an interrupt
+			   comes (cpu_spinuntil_int). If the PIC output is already high,
+			   the new request doesn't change it, so wake the CPU here: it
+			   was woken by every interrupt before the PIC was emulated. */
+			if (pic_int_out)
+				cpu_triggerint(0);
+		}
+		pic_irq_lines |= mask;
+	}
+	else
+	{
+		/* a request not taken yet is withdrawn */
+		pic_irq_lines &= ~mask;
+		pic_irr &= ~mask;
+	}
+
+	pic_update();
+}
+
+/* the CPU takes the interrupt: return the vector */
+static int m92_irq_callback(int irqline)
+{
+	int level = pic_current_level;
+
+	/* the CPU has cleared its pending request */
+	pic_int_out = 0;
+
+	if (level == -1)
+	{
+		/* spurious interrupt, as on the real chip */
+		pic_update();
+		return pic_base + 7;
+	}
+
+	if (!pic_level_trig_mode)
+		pic_irr &= ~(1 << level);
+	if (!pic_auto_eoi)
+		pic_isr |= 1 << level;
+
+	pic_update();
+
+	return pic_base + level;
+}
+
+static READ_HANDLER( m92_pic_r )
+{
+	UINT8 data = 0;
+
+	if (offset & 1)		/* upper byte of the 16 bit bus */
+		return 0;
+
+	if (offset == 0)
+	{
+		if (pic_ocw3 & 0x04)
+		{
+			/* polling */
+			if (pic_current_level != -1)
+			{
+				data = 0x80 | pic_current_level;
+				if (!pic_level_trig_mode)
+					pic_irr &= ~(1 << pic_current_level);
+				if (!pic_auto_eoi)
+					pic_isr |= 1 << pic_current_level;
+				pic_update();
+			}
+		}
+		else if ((pic_ocw3 & 0x03) == 2)
+			data = pic_irr;
+		else if ((pic_ocw3 & 0x03) == 3)
+			data = pic_isr & ~pic_imr;
+	}
+	else
+		data = pic_imr;
+
+	return data;
+}
+
+static WRITE_HANDLER( m92_pic_w )
+{
+	int n;
+	UINT8 mask;
+
+	if (offset & 1)		/* upper byte of the 16 bit bus */
+		return;
+
+	if (offset == 0)
+	{
+		if (data & 0x10)
+		{
+			/* ICW1: this resets the chip */
+			pic_imr = 0x00;
+			pic_isr = 0x00;
+			pic_irr = 0x00;
+			pic_level_trig_mode = (data & 0x08) ? 1 : 0;
+			pic_cascade = (data & 0x02) ? 0 : 1;
+			pic_icw4_needed = (data & 0x01) ? 1 : 0;
+			pic_state = PIC_ICW2;
+			pic_current_level = -1;
+			pic_set_int_out(0);
+		}
+		else if (pic_state == PIC_READY)
+		{
+			if ((data & 0x98) == 0x08)
+			{
+				/* OCW3 */
+				pic_ocw3 = data;
+			}
+			else if ((data & 0x18) == 0x00)
+			{
+				/* OCW2: end of interrupt and priority */
+				n = data & 7;
+				mask = 1 << n;
+
+				switch (data & 0xe0)
+				{
+					case 0x00:	/* rotate in automatic EOI mode: clear */
+						pic_prio = 0;
+						break;
+					case 0x20:	/* non specific EOI */
+					case 0xa0:	/* rotate on non specific EOI */
+						for (n = 0, mask = 1 << pic_prio; n < 8; n++, mask = (mask << 1) | (mask >> 7))
+						{
+							if (pic_isr & mask)
+							{
+								pic_isr &= ~mask;
+								if ((data & 0xe0) == 0xa0)
+									pic_prio = (pic_prio + 1) & 7;
+								break;
+							}
+						}
+						break;
+					case 0x60:	/* specific EOI */
+						pic_isr &= ~mask;
+						break;
+					case 0x80:	/* rotate in automatic EOI mode: set */
+						pic_prio = (pic_prio + 1) & 7;
+						break;
+					case 0xc0:	/* set priority */
+						pic_prio = (n + 1) & 7;
+						break;
+					case 0xe0:	/* rotate on specific EOI */
+						if (pic_isr & mask)
+						{
+							pic_isr &= ~mask;
+							pic_prio = (n + 1) & 7;
+						}
+						break;
+				}
+			}
+		}
+	}
+	else
+	{
+		switch (pic_state)
+		{
+			case PIC_ICW2:
+				pic_base = data & 0xf8;
+				if (pic_cascade)
+					pic_state = PIC_ICW3;
+				else
+					pic_state = pic_icw4_needed ? PIC_ICW4 : PIC_READY;
+				break;
+
+			case PIC_ICW3:	/* no cascaded PIC on this board */
+				pic_state = pic_icw4_needed ? PIC_ICW4 : PIC_READY;
+				break;
+
+			case PIC_ICW4:
+				pic_auto_eoi = (data & 0x02) ? 1 : 0;
+				pic_state = PIC_READY;
+				break;
+
+			case PIC_READY:
+				/* OCW1: interrupt mask */
+				pic_imr = data;
+				break;
+		}
+	}
+
+	pic_update();
+}
+
+static void pic_reset(void)
+{
+	pic_state = PIC_READY;
+	pic_isr = pic_irr = pic_irq_lines = pic_prio = pic_imr = 0;
+	pic_ocw3 = 2;
+	pic_level_trig_mode = pic_cascade = pic_icw4_needed = 0;
+	pic_base = 0;
+	pic_auto_eoi = 0;
+	pic_current_level = -1;
+	pic_int_out = 0;
+}
+
+static void pic_state_register(void)
+{
+	state_save_register_UINT8("m92pic", 0, "state",      &pic_state, 1);
+	state_save_register_UINT8("m92pic", 0, "isr",        &pic_isr, 1);
+	state_save_register_UINT8("m92pic", 0, "irr",        &pic_irr, 1);
+	state_save_register_UINT8("m92pic", 0, "prio",       &pic_prio, 1);
+	state_save_register_UINT8("m92pic", 0, "imr",        &pic_imr, 1);
+	state_save_register_UINT8("m92pic", 0, "irq_lines",  &pic_irq_lines, 1);
+	state_save_register_UINT8("m92pic", 0, "ocw3",       &pic_ocw3, 1);
+	state_save_register_UINT8("m92pic", 0, "level_trig", &pic_level_trig_mode, 1);
+	state_save_register_UINT8("m92pic", 0, "cascade",    &pic_cascade, 1);
+	state_save_register_UINT8("m92pic", 0, "icw4",       &pic_icw4_needed, 1);
+	state_save_register_UINT8("m92pic", 0, "base",       &pic_base, 1);
+	state_save_register_UINT8("m92pic", 0, "auto_eoi",   &pic_auto_eoi, 1);
+	state_save_register_INT32("m92pic", 0, "level",      &pic_current_level, 1);
+	state_save_register_INT32("m92pic", 0, "int_out",    &pic_int_out, 1);
+}
+
+static MACHINE_INIT( m92 )
+{
+	pic_reset();
+	cpu_set_irq_callback(0, m92_irq_callback);
+}
+
+/* starting a sprite DMA lowers the sprite interrupt input */
+static WRITE_HANDLER( m92_spritecontrol_pic_w )
+{
+	if (offset == 8)
+		pic_set_irq_line(M92_IRQ_SPRITE, 0);
+	m92_spritecontrol_w(offset, data);
+}
+
+/* writing the raster line lowers the raster interrupt input */
+static WRITE_HANDLER( m92_master_control_pic_w )
+{
+	m92_master_control_w(offset, data);
+	if (offset == 7)
+		pic_set_irq_line(M92_IRQ_RASTER, 0);
+}
 
 /*****************************************************************************/
 
@@ -226,6 +530,7 @@ static WRITE_HANDLER( m92_soundlatch_w )
 static READ_HANDLER( m92_sound_status_r )
 {
 /*logerror("%06x: read sound status\n",activecpu_get_pc());*/
+	pic_set_irq_line(M92_IRQ_SOUND, 0);
 	if (offset == 0)
 		return sound_status&0xff;
 	return sound_status>>8;
@@ -252,7 +557,7 @@ static WRITE_HANDLER( m92_sound_status_w )
 {
 	if (offset == 0) {
 		sound_status = data | (sound_status&0xff00);
-		cpu_set_irq_line_and_vector(0,0,HOLD_LINE,M92_IRQ_3);
+		pic_set_irq_line(M92_IRQ_SOUND, 1);
 	}
 	else
 		sound_status = (data<<8) | (sound_status&0xff);
@@ -282,7 +587,7 @@ static MEMORY_WRITE_START( writemem )
 	{ 0xe0000, 0xeffff, MWA_RAM, &m92_ram }, /* System ram */
 	{ 0xf8000, 0xf87ff, MWA_RAM, &spriteram, &spriteram_size },
 	{ 0xf8800, 0xf8fff, m92_paletteram_w },
-	{ 0xf9000, 0xf900f, m92_spritecontrol_w, &m92_spritecontrol },
+	{ 0xf9000, 0xf900f, m92_spritecontrol_pic_w, &m92_spritecontrol },
 	{ 0xf9800, 0xf9801, m92_videocontrol_w },
 	{ 0xffff0, 0xfffff, MWA_ROM },
 MEMORY_END
@@ -302,7 +607,7 @@ static MEMORY_WRITE_START( lethalth_writemem )
 	{ 0xe0000, 0xeffff, MWA_RAM, &m92_ram }, /* System ram */
 	{ 0xf8000, 0xf87ff, MWA_RAM, &spriteram, &spriteram_size },
 	{ 0xf8800, 0xf8fff, m92_paletteram_w },
-	{ 0xf9000, 0xf900f, m92_spritecontrol_w, &m92_spritecontrol },
+	{ 0xf9000, 0xf900f, m92_spritecontrol_pic_w, &m92_spritecontrol },
 	{ 0xf9800, 0xf9801, m92_videocontrol_w },
 	{ 0xffff0, 0xfffff, MWA_ROM },
 MEMORY_END
@@ -317,17 +622,18 @@ static PORT_READ_START( readport )
 	{ 0x06, 0x06, input_port_2_r }, /* Player 3 */
 	{ 0x07, 0x07, input_port_3_r },	/* Player 4 */
 	{ 0x08, 0x09, m92_sound_status_r },	/* answer from sound CPU */
+	{ 0x40, 0x43, m92_pic_r },          /* Interrupt controller */
 PORT_END
 
 static PORT_WRITE_START( writeport )
 	{ 0x00, 0x01, m92_soundlatch_w },
 	{ 0x02, 0x03, m92_coincounter_w },
 	{ 0x20, 0x21, m92_bankswitch_w },
-	{ 0x40, 0x43, MWA_NOP }, /* Interrupt controller, only written to at bootup */
+	{ 0x40, 0x43, m92_pic_w }, /* Interrupt controller */
 	{ 0x80, 0x87, m92_pf1_control_w },
 	{ 0x88, 0x8f, m92_pf2_control_w },
 	{ 0x90, 0x97, m92_pf3_control_w },
-	{ 0x98, 0x9f, m92_master_control_w },
+	{ 0x98, 0x9f, m92_master_control_pic_w },
 /*	{ 0xc0, 0xc1, m92_sound_reset_w }, */ /* causes breakage with certain games */
 PORT_END
 
@@ -335,11 +641,11 @@ static PORT_WRITE_START( psoldier_writeport )
 	{ 0x00, 0x01, m92_soundlatch_w },
 	{ 0x02, 0x03, m92_coincounter_w },
 	{ 0x20, 0x21, m92_bankswitch_w },
-	{ 0x40, 0x43, MWA_NOP }, /* Interrupt controller, only written to at bootup */
+	{ 0x40, 0x43, m92_pic_w }, /* Interrupt controller */
 	{ 0x80, 0x87, m92_pf1_control_w },
 	{ 0x88, 0x8f, m92_pf2_control_w },
 	{ 0x90, 0x97, m92_pf3_control_w },
-	{ 0x98, 0x9f, m92_master_control_w },
+	{ 0x98, 0x9f, m92_master_control_pic_w },
 	{ 0xc0, 0xc1, m92_sound_reset_w },
 PORT_END
 
@@ -1163,7 +1469,9 @@ static INTERRUPT_GEN( m92_interrupt )
 	if (osd_skip_this_frame()==0)
 		m92_vh_raster_partial_refresh(Machine->scrbitmap,0,249);
 
-	cpu_set_irq_line_and_vector(0, 0, HOLD_LINE, M92_IRQ_0); /* VBL */
+	/* VBL: one rising edge per frame */
+	pic_set_irq_line(M92_IRQ_VBL, 0);
+	pic_set_irq_line(M92_IRQ_VBL, 1);
 }
 
 static INTERRUPT_GEN( m92_raster_interrupt )
@@ -1171,12 +1479,16 @@ static INTERRUPT_GEN( m92_raster_interrupt )
 	static int last_line=0;
 	int line = M92_SCANLINES - cpu_getiloops();
 
+	/* the VBL input is high for one line */
+	if (line != 249)
+		pic_set_irq_line(M92_IRQ_VBL, 0);
+
 	/* Raster interrupt */
 	if (m92_raster_enable && line==m92_raster_irq_position) {
 		if (osd_skip_this_frame()==0)
 			m92_vh_raster_partial_refresh(Machine->scrbitmap,last_line,line+1);
 		last_line=line+1;
-		cpu_set_irq_line_and_vector(0, 0, HOLD_LINE, M92_IRQ_2);
+		pic_set_irq_line(M92_IRQ_RASTER, 1);
 	}
 
 	/* Redraw screen, then set vblank and trigger the VBL interrupt */
@@ -1184,7 +1496,7 @@ static INTERRUPT_GEN( m92_raster_interrupt )
 		if (osd_skip_this_frame()==0)
 			m92_vh_raster_partial_refresh(Machine->scrbitmap,last_line,249);
 		last_line=249;
-		cpu_set_irq_line_and_vector(0, 0, HOLD_LINE, M92_IRQ_0);
+		pic_set_irq_line(M92_IRQ_VBL, 1);
 	}
 
 	/* End of vblank */
@@ -1195,8 +1507,9 @@ static INTERRUPT_GEN( m92_raster_interrupt )
 
 void m92_sprite_interrupt(void)
 {
-	cpu_set_irq_line_and_vector(0,0,HOLD_LINE,M92_IRQ_1);
+	pic_set_irq_line(M92_IRQ_SPRITE, 1);
 }
+
 
 static MACHINE_DRIVER_START( raster )
 
@@ -1211,6 +1524,7 @@ static MACHINE_DRIVER_START( raster )
 
 	MDRV_FRAMES_PER_SECOND(60)
 	MDRV_VBLANK_DURATION(DEFAULT_60HZ_VBLANK_DURATION)
+	MDRV_MACHINE_INIT(m92)
 
 	/* video hardware */
 	MDRV_VIDEO_ATTRIBUTES(VIDEO_TYPE_RASTER | VIDEO_BUFFERS_SPRITERAM)
@@ -1242,6 +1556,7 @@ static MACHINE_DRIVER_START( nonraster )
 
 	MDRV_FRAMES_PER_SECOND(60)
 	MDRV_VBLANK_DURATION(DEFAULT_60HZ_VBLANK_DURATION)
+	MDRV_MACHINE_INIT(m92)
 
 	/* video hardware */
 	MDRV_VIDEO_ATTRIBUTES(VIDEO_TYPE_RASTER | VIDEO_BUFFERS_SPRITERAM)
@@ -1273,6 +1588,7 @@ static MACHINE_DRIVER_START( lethalth )
 
 	MDRV_FRAMES_PER_SECOND(60)
 	MDRV_VBLANK_DURATION(DEFAULT_60HZ_VBLANK_DURATION)
+	MDRV_MACHINE_INIT(m92)
 
 	/* video hardware */
 	MDRV_VIDEO_ATTRIBUTES(VIDEO_TYPE_RASTER | VIDEO_BUFFERS_SPRITERAM)
@@ -1304,6 +1620,7 @@ static MACHINE_DRIVER_START( psoldier )
 
 	MDRV_FRAMES_PER_SECOND(60)
 	MDRV_VBLANK_DURATION(DEFAULT_60HZ_VBLANK_DURATION)
+	MDRV_MACHINE_INIT(m92)
 
 	/* video hardware */
 	MDRV_VIDEO_ATTRIBUTES(VIDEO_TYPE_RASTER | VIDEO_BUFFERS_SPRITERAM)
@@ -2394,7 +2711,6 @@ static void m92_startup(void)
 	memcpy(RAM+0xffff0,RAM+0x1fff0,0x10); /* Sound cpu Start vector */
 
 	m92_game_kludge=0;
-	m92_irq_vectorbase=0x80;
 	m92_raster_enable=1;
 	m92_sprite_buffer_busy=0x80;
 }
@@ -2405,6 +2721,7 @@ static void init_m92(const unsigned char *decryption_table)
 	setvector_callback(VECTOR_INIT);
 	irem_cpu_decrypt(1,decryption_table);
 
+	pic_state_register();
 	state_save_register_int  ("main", 0, "irqvector",    &irqvector);
 	state_save_register_int  ("main", 0, "sound_status", &sound_status);
 	state_save_register_int("main", 0, "bankaddress", &bankaddress);
@@ -2450,7 +2767,6 @@ static DRIVER_INIT( rtypeleo )
 {
 	install_mem_read_handler(0, 0xe0032, 0xe0033, rtypeleo_cycle_r);
 	init_m92(rtypeleo_decryption_table);
-	m92_irq_vectorbase=0x20;
 	m92_game_kludge=3;
 }
 
@@ -2458,7 +2774,6 @@ static DRIVER_INIT( rtypelej )
 {
 	install_mem_read_handler(0, 0xe0032, 0xe0033, rtypelej_cycle_r);
 	init_m92(rtypeleo_decryption_table);
-	m92_irq_vectorbase=0x20;
 	m92_game_kludge=3;
 }
 
@@ -2489,7 +2804,6 @@ static DRIVER_INIT( lethalth )
 {
 	install_mem_read_handler(0, 0xe001e, 0xe001f, lethalth_cycle_r);
 	init_m92(lethalth_decryption_table);
-	m92_irq_vectorbase=0x20;
 
 	/* This game sets the raster IRQ position, but the interrupt routine
 		is just an iret, no need to emulate it */
@@ -2512,7 +2826,6 @@ static DRIVER_INIT( ssoldier )
  install_mem_read_handler(1, 0xa0c34, 0xa0c35, psoldier_snd_cycle_r);
 
  init_m92(psoldier_decryption_table);
- m92_irq_vectorbase=0x20;
  /* main CPU expects an answer even before writing the first command */
  sound_status = 0x80;
 }
@@ -2523,7 +2836,6 @@ static DRIVER_INIT( psoldier )
 	install_mem_read_handler(1, 0xa0c34, 0xa0c35, psoldier_snd_cycle_r);
 
 	init_m92(psoldier_decryption_table);
-	m92_irq_vectorbase=0x20;
 	/* main CPU expects an answer even before writing the first command */
 	sound_status = 0x80;
 }
