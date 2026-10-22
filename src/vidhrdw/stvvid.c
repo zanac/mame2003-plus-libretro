@@ -317,6 +317,17 @@ static UINT16 sprite_colorbank;
 static int vdp1_sprite_priorities_used[8];
 static int vdp1_sprite_priorities_usage_valid;
 static UINT8 vdp1_sprite_priorities_in_fb_line[512][8];
+/* the first and last framebuffer x of the pixels of each priority seen on a line */
+static UINT16 vdp1_sprite_priorities_min_x[512][8], vdp1_sprite_priorities_max_x[512][8];
+
+/* a pixel of priority 'p' at (x, y) another pass draws */
+#define SPRITE_PRIORITY_SEEN(p, x, y) do { \
+	UINT8 sp_ = (p); \
+	vdp1_sprite_priorities_used[sp_] = 1; \
+	vdp1_sprite_priorities_in_fb_line[y][sp_] = 1; \
+	if ((x) < vdp1_sprite_priorities_min_x[y][sp_]) vdp1_sprite_priorities_min_x[y][sp_] = (x); \
+	if ((x) > vdp1_sprite_priorities_max_x[y][sp_]) vdp1_sprite_priorities_max_x[y][sp_] = (x); \
+} while (0)
 
 struct vdp2_tilemap_capabilities
 {
@@ -9405,19 +9416,28 @@ static void draw_sprites(struct mame_bitmap *bitmap, const struct rectangle *cli
 		{
 			for ( y = cliprect->min_y; y <= cliprect->max_y; y++ )
 			{
+				int x0 = cliprect->min_x, x1 = cliprect->max_x;
 				if ( vdp1_sprite_priorities_usage_valid )
+				{
 					if (vdp1_sprite_priorities_in_fb_line[y][pri] == 0)
 						continue;
+					/* the other pixels of the line only belong to other passes */
+					if (x0 < vdp1_sprite_priorities_min_x[y][pri]) x0 = vdp1_sprite_priorities_min_x[y][pri];
+					if (x1 > vdp1_sprite_priorities_max_x[y][pri]) x1 = vdp1_sprite_priorities_max_x[y][pri];
+				}
 
 				framebuffer_line = vdp1.framebuffer_display_lines[y];
 				bitmap_line = BMP32(bitmap, y);
 
-				for ( x = cliprect->min_x; x <= cliprect->max_x; x++ )
+				for ( x = x0; x <= x1; x++ )
 				{
+					pix = framebuffer_line[x];
+					/* a zero pixel draws nothing in any pass: it does not mark its priority either */
+					if (pix == 0)
+						continue;
 					if(!vdp2_window_process(x,y))
 						continue;
 
-					pix = framebuffer_line[x];
 					/* pukunpa, no alpha no framebuffer bumps */
 					if(sprite_window && pix == 0x8000)
 						continue;
@@ -9426,8 +9446,7 @@ static void draw_sprites(struct mame_bitmap *bitmap, const struct rectangle *cli
 					{
 						if ( sprite_priorities[0] != pri )
 						{
-							vdp1_sprite_priorities_used[sprite_priorities[0]] = 1;
-							vdp1_sprite_priorities_in_fb_line[y][sprite_priorities[0]] = 1;
+							SPRITE_PRIORITY_SEEN(sprite_priorities[0], x, y);
 							continue;
 						};
 
@@ -9446,8 +9465,7 @@ static void draw_sprites(struct mame_bitmap *bitmap, const struct rectangle *cli
 						priority = sprite_priorities[(pix >> sprite_priority_shift) & sprite_priority_mask];
 						if ( priority != pri )
 						{
-							vdp1_sprite_priorities_used[priority] = 1;
-							vdp1_sprite_priorities_in_fb_line[y][priority] = 1;
+							SPRITE_PRIORITY_SEEN(priority, x, y);
 							continue;
 						};
 
@@ -9500,19 +9518,28 @@ static void draw_sprites(struct mame_bitmap *bitmap, const struct rectangle *cli
 		{
 			for ( y = cliprect->min_y; y <= cliprect->max_y; y++ )
 			{
+				int x0 = cliprect->min_x, x1 = cliprect->max_x;
 				if ( vdp1_sprite_priorities_usage_valid )
+				{
 					if (vdp1_sprite_priorities_in_fb_line[y][pri] == 0)
 						continue;
+					/* the other pixels of the line only belong to other passes */
+					if (x0 < vdp1_sprite_priorities_min_x[y][pri]) x0 = vdp1_sprite_priorities_min_x[y][pri];
+					if (x1 > vdp1_sprite_priorities_max_x[y][pri]) x1 = vdp1_sprite_priorities_max_x[y][pri];
+				}
 
 				framebuffer_line = vdp1.framebuffer_display_lines[y];
 				bitmap_line = BMP32(bitmap, y);
 
-				for ( x = cliprect->min_x; x <= cliprect->max_x; x++ )
+				for ( x = x0; x <= x1; x++ )
 				{
+					pix = framebuffer_line[x];
+					/* a zero pixel draws nothing in any pass: it does not mark its priority either */
+					if (pix == 0)
+						continue;
 					if(!vdp2_window_process(x,y))
 						continue;
 
-					pix = framebuffer_line[x];
 					/* raymanj on FMV, alpha enabled (no noticeable difference?) */
 					if(sprite_window && pix == 0x8000)
 						continue;
@@ -9521,8 +9548,7 @@ static void draw_sprites(struct mame_bitmap *bitmap, const struct rectangle *cli
 					{
 						if ( sprite_priorities[0] != pri )
 						{
-							vdp1_sprite_priorities_used[sprite_priorities[0]] = 1;
-							vdp1_sprite_priorities_in_fb_line[y][sprite_priorities[0]] = 1;
+							SPRITE_PRIORITY_SEEN(sprite_priorities[0], x, y);
 							continue;
 						};
 
@@ -9549,8 +9575,7 @@ static void draw_sprites(struct mame_bitmap *bitmap, const struct rectangle *cli
 						priority = sprite_priorities[(pix >> sprite_priority_shift) & sprite_priority_mask];
 						if ( priority != pri )
 						{
-							vdp1_sprite_priorities_used[priority] = 1;
-							vdp1_sprite_priorities_in_fb_line[y][priority] = 1;
+							SPRITE_PRIORITY_SEEN(priority, x, y);
 							continue;
 						};
 
@@ -9631,10 +9656,13 @@ static void draw_sprites(struct mame_bitmap *bitmap, const struct rectangle *cli
 
 			for ( x = cliprect->min_x; x <= cliprect->max_x /(double_x+1) ; x++ )
 			{
+				pix = framebuffer_line[x];
+				/* a zero pixel draws nothing in any pass: it does not mark its priority either */
+				if (pix == 0)
+					continue;
 				if(!vdp2_window_process(x,y))
 					continue;
 
-				pix = framebuffer_line[x];
 				/* amoudan, interlaced case */
 				if(sprite_window && pix == 0x8000)
 					continue;
@@ -9643,8 +9671,7 @@ static void draw_sprites(struct mame_bitmap *bitmap, const struct rectangle *cli
 				{
 					if ( sprite_priorities[0] != pri )
 					{
-						vdp1_sprite_priorities_used[sprite_priorities[0]] = 1;
-						vdp1_sprite_priorities_in_fb_line[y][sprite_priorities[0]] = 1;
+						SPRITE_PRIORITY_SEEN(sprite_priorities[0], x, y);
 						continue;
 					};
 
@@ -9711,8 +9738,7 @@ static void draw_sprites(struct mame_bitmap *bitmap, const struct rectangle *cli
 					priority = sprite_priorities[(pix >> sprite_priority_shift) & sprite_priority_mask];
 					if ( priority != pri )
 					{
-						vdp1_sprite_priorities_used[priority] = 1;
-						vdp1_sprite_priorities_in_fb_line[y][priority] = 1;
+						SPRITE_PRIORITY_SEEN(priority, x, y);
 						continue;
 					};
 
@@ -9842,6 +9868,8 @@ static void vdp2_render(struct mame_bitmap *bitmap, const struct rectangle *clip
 		vdp1_sprite_priorities_usage_valid = 0;
 		memset(vdp1_sprite_priorities_used, 0, sizeof(vdp1_sprite_priorities_used));
 		memset(vdp1_sprite_priorities_in_fb_line, 0, sizeof(vdp1_sprite_priorities_in_fb_line));
+		memset(vdp1_sprite_priorities_min_x, 0xff, sizeof(vdp1_sprite_priorities_min_x));
+		memset(vdp1_sprite_priorities_max_x, 0, sizeof(vdp1_sprite_priorities_max_x));
 
 		/*If a plane has a priority value of zero it isn't shown at all.*/
 		for(pri=1;pri<8;pri++)
