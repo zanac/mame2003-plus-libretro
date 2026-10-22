@@ -611,7 +611,6 @@ static UINT8 vdp2_are_map_registers_equal(void);
 static void vdp2_check_fade_control_for_layer(void);
 static UINT8 vdp2_check_vram_cycle_pattern_registers( UINT8 access_command_pnmdr, UINT8 access_command_cpdr, UINT8 bitmap_enable );
 static void vdp2_compute_color_offset( int *r, int *g, int *b, int cor );
-static void vdp2_compute_color_offset_UINT32(rgb_t *rgb, int cor);
 static void vdp2_drawgfxzoom( struct mame_bitmap *dest_bmp,const struct rectangle *clip,gfx_element *gfx, UINT32 code,UINT32 color,int flipx,int flipy,int sx,int sy, int transparency,int scalex, int scaley, int sprite_screen_width, int sprite_screen_height, int alpha);
 static void vdp2_drawgfxzoom_rgb555( struct mame_bitmap *dest_bmp,const struct rectangle *clip, UINT32 code,UINT32 color,int flipx,int flipy,int sx,int sy, int transparency,int scalex, int scaley, int sprite_screen_width, int sprite_screen_height, int alpha);
 static void vdp2_drawgfx_rgb555(struct mame_bitmap *dest_bmp, const struct rectangle *clip, UINT32 code, int flipx, int flipy, int sx, int sy, int transparency, int alpha);
@@ -5085,31 +5084,36 @@ static void vdp2_compute_color_offset( int *r, int *g, int *b, int cor )
 	if(*b > 0xff)   { *b = 0xff; }
 }
 
-static void vdp2_compute_color_offset_UINT32(rgb_t *rgb, int cor)
+/*
+	The color offset of a whole screen at once: the signed offsets of
+	set A (cor == 0) or B for the three components, then each pixel only
+	adds and clamps.
+*/
+static void vdp2_color_offset_values(int cor, int *r, int *g, int *b)
 {
-	int _r = RGB_RED(*rgb);
-	int _g = RGB_GREEN(*rgb);
-	int _b = RGB_BLUE(*rgb);
 	if ( cor == 0 )
 	{
-		_r = (VDP2_COAR & 0x100) ? (_r - (0x100 - (VDP2_COAR & 0xff))) : ((VDP2_COAR & 0xff) + _r);
-		_g = (VDP2_COAG & 0x100) ? (_g - (0x100 - (VDP2_COAG & 0xff))) : ((VDP2_COAG & 0xff) + _g);
-		_b = (VDP2_COAB & 0x100) ? (_b - (0x100 - (VDP2_COAB & 0xff))) : ((VDP2_COAB & 0xff) + _b);
+		*r = (VDP2_COAR & 0x100) ? -(0x100 - (VDP2_COAR & 0xff)) : (VDP2_COAR & 0xff);
+		*g = (VDP2_COAG & 0x100) ? -(0x100 - (VDP2_COAG & 0xff)) : (VDP2_COAG & 0xff);
+		*b = (VDP2_COAB & 0x100) ? -(0x100 - (VDP2_COAB & 0xff)) : (VDP2_COAB & 0xff);
 	}
 	else
 	{
-		_r = (VDP2_COBR & 0x100) ? (_r - (0xff - (VDP2_COBR & 0xff))) : ((VDP2_COBR & 0xff) + _r);
-		_g = (VDP2_COBG & 0x100) ? (_g - (0xff - (VDP2_COBG & 0xff))) : ((VDP2_COBG & 0xff) + _g);
-		_b = (VDP2_COBB & 0x100) ? (_b - (0xff - (VDP2_COBB & 0xff))) : ((VDP2_COBB & 0xff) + _b);
+		*r = (VDP2_COBR & 0x100) ? -(0xff - (VDP2_COBR & 0xff)) : (VDP2_COBR & 0xff);
+		*g = (VDP2_COBG & 0x100) ? -(0xff - (VDP2_COBG & 0xff)) : (VDP2_COBG & 0xff);
+		*b = (VDP2_COBB & 0x100) ? -(0xff - (VDP2_COBB & 0xff)) : (VDP2_COBB & 0xff);
 	}
-	if(_r < 0)      { _r = 0; }
-	if(_r > 0xff)   { _r = 0xff; }
-	if(_g < 0)      { _g = 0; }
-	if(_g > 0xff)   { _g = 0xff; }
-	if(_b < 0)      { _b = 0; }
-	if(_b > 0xff)   { _b = 0xff; }
+}
 
-	*rgb = RGB_MAKE(_r, _g, _b);
+static INLINE rgb_t vdp2_apply_color_offset(rgb_t rgb, int ro, int go, int bo)
+{
+	int r = (int)RGB_RED(rgb) + ro;
+	int g = (int)RGB_GREEN(rgb) + go;
+	int b = (int)RGB_BLUE(rgb) + bo;
+	if (r < 0) r = 0; else if (r > 0xff) r = 0xff;
+	if (g < 0) g = 0; else if (g > 0xff) g = 0xff;
+	if (b < 0) b = 0; else if (b > 0xff) b = 0xff;
+	return RGB_MAKE(r, g, b);
 }
 
 static void vdp2_drawgfxzoom(
@@ -7342,6 +7346,54 @@ static void vdp2_check_tilemap(struct mame_bitmap *bitmap, const struct rectangl
 }
 
 
+#define ROZ_PREFETCH	8
+
+/*
+	The rotation windows of line y for x in [min_x, max_x]: 1 where the
+	pixel goes through, as vdp2_roz_window (and vdp2_roz_mode3_window
+	when mode3 is set) give per pixel, with the window coordinates and
+	settings read once for the line. Returns 0 when no window is enabled
+	(all the pixels go through), without filling the mask.
+*/
+static int vdp2_roz_window_line(UINT8 *mask, int min_x, int max_x, int y, int mode3, int rot_parameter)
+{
+	int s0 = 0, e0 = 0, sy0 = 0, ey0 = 0, s1 = 0, e1 = 0, sy1 = 0, ey1 = 0, x;
+	UINT8 logic = VDP2_R0LOG, w0e = VDP2_R0W0E, w1e = VDP2_R0W1E, w0a = VDP2_R0W0A, w1a = VDP2_R0W1A;
+	UINT8 mlogic = VDP2_RPLOG, mw0e = VDP2_RPW0E, mw1e = VDP2_RPW1E, mw0a = VDP2_RPW0A, mw1a = VDP2_RPW1A;
+	int roz = (w0e || w1e), m3 = mode3 && (mw0e || mw1e);
+
+	if (!roz && !mode3)
+		return 0;
+	if (roz || m3)
+	{
+		vdp2_get_window0_coordinates(&s0, &e0, &sy0, &ey0, y);
+		vdp2_get_window1_coordinates(&s1, &e1, &sy1, &ey1, y);
+	}
+	for (x = min_x; x <= max_x; x++)
+	{
+		int pass = 1;
+		if (roz)
+		{
+			int w0 = get_roz_window_pixel(s0, e0, sy0, ey0, x, y, w0e, w0a);
+			int w1 = get_roz_window_pixel(s1, e1, sy1, ey1, x, y, w1e, w1a);
+			pass = logic & 1 ? (w0 | w1) : (w0 & w1);
+		}
+		if (pass && mode3)
+		{
+			if (m3)
+			{
+				int w0 = get_roz_window_pixel(s0, e0, sy0, ey0, x, y, mw0e, mw0a);
+				int w1 = get_roz_window_pixel(s1, e1, sy1, ey1, x, y, mw1e, mw1a);
+				pass = (mlogic & 1 ? (w0 | w1) : (w0 & w1)) ^ rot_parameter;
+			}
+			else
+				pass = rot_parameter ^ 1;
+		}
+		mask[x] = pass;
+	}
+	return 1;
+}
+
 static void vdp2_copy_roz_bitmap(struct mame_bitmap *bitmap,
 										struct mame_bitmap *roz_bitmap,
 										const struct rectangle *cliprect,
@@ -7365,8 +7417,16 @@ static void vdp2_copy_roz_bitmap(struct mame_bitmap *bitmap,
 	rgb_t pix;
 	/*UINT32 coeff_line_color_screen_data; */
 	INT32 clipxmask = 0, clipymask = 0;
+	int co_r = 0, co_g = 0, co_b = 0;
+	static UINT8 winmask[1024];
+	int use_winmask;
+	/* the plane's pixels without the line table (one dependent load less per pixel) */
+	const UINT32 *rozbase = (const UINT32 *)roz_bitmap->base;
+	const int rozpitch = roz_bitmap->rowpixels;
 
 
+	if (current_tilemap.fade_control & 1)
+		vdp2_color_offset_values(current_tilemap.fade_control & 2, &co_r, &co_g, &co_b);
 	vcnt_shift = get_lsmd() == 3;
 	hcnt_shift = BIT(get_hreso(), 1);
 
@@ -7573,28 +7633,27 @@ static void vdp2_copy_roz_bitmap(struct mame_bitmap *bitmap,
 			dxs = mul_fixed32( kx, mul_fixed32( dx, 1 << (16-hcnt_shift)));
 			dys = mul_fixed32( ky, mul_fixed32( dy, 1 << (16-hcnt_shift)));
 
+			use_winmask = vdp2_roz_window_line(winmask, cliprect->min_x, cliprect->max_x, vcnt, current_tilemap.roz_mode3 == 1, iRP - 1);
 			for (hcnt = cliprect->min_x; hcnt <= cliprect->max_x; xs+=dxs, ys+=dys, hcnt++ )
 			{
+#ifdef __GNUC__
+				/* the plane is up to 64MB: fetch the pixel needed a few steps ahead */
+				__builtin_prefetch(&rozbase[(((ys + dys * ROZ_PREFETCH) >> 16) & planerenderedsizey) * rozpitch + (((xs + dxs * ROZ_PREFETCH) >> 16) & planerenderedsizex)]);
+#endif
 				x = xs >> 16;
 				y = ys >> 16;
 
 				if ( x & clipxmask || y & clipymask ) continue;
-				if ( vdp2_roz_window(hcnt, vcnt) == 0 )
+				if ( use_winmask && !winmask[hcnt] )
 					continue;
 
-				if ( current_tilemap.roz_mode3 == 1 )
-				{
-					if( vdp2_roz_mode3_window(hcnt, vcnt, iRP-1) == 0 )
-						continue;
-				}
-
-				pix = BMP32(roz_bitmap, y & planerenderedsizey)[x & planerenderedsizex];
+				pix = rozbase[(y & planerenderedsizey) * rozpitch + (x & planerenderedsizex)];
 				if (current_tilemap.transparency & STV_TRANSPARENCY_ALPHA)
 				{
 					if ((current_tilemap.transparency & STV_TRANSPARENCY_NONE) || (pix & 0xffffff))
 					{
 						if(current_tilemap.fade_control & 1)
-							vdp2_compute_color_offset_UINT32(&pix,current_tilemap.fade_control & 2);
+							pix = vdp2_apply_color_offset(pix, co_r, co_g, co_b);
 
 						line[hcnt] = stv_alpha_blend_r32( line[hcnt], pix, current_tilemap.alpha );
 					}
@@ -7604,7 +7663,7 @@ static void vdp2_copy_roz_bitmap(struct mame_bitmap *bitmap,
 					if ((current_tilemap.transparency & STV_TRANSPARENCY_NONE) || (pix & 0xffffff))
 					{
 						if(current_tilemap.fade_control & 1)
-							vdp2_compute_color_offset_UINT32(&pix,current_tilemap.fade_control & 2);
+							pix = vdp2_apply_color_offset(pix, co_r, co_g, co_b);
 
 						line[hcnt] = add_blend_r32( line[hcnt], pix );
 					}
@@ -7614,7 +7673,7 @@ static void vdp2_copy_roz_bitmap(struct mame_bitmap *bitmap,
 					if ((current_tilemap.transparency & STV_TRANSPARENCY_NONE) || (pix & 0xffffff))
 					{
 						if(current_tilemap.fade_control & 1)
-							vdp2_compute_color_offset_UINT32(&pix,current_tilemap.fade_control & 2);
+							pix = vdp2_apply_color_offset(pix, co_r, co_g, co_b);
 
 						line[hcnt] = pix;
 					}
@@ -7692,13 +7751,13 @@ static void vdp2_copy_roz_bitmap(struct mame_bitmap *bitmap,
 
 				if ( x & clipxmask || y & clipymask ) continue;
 
-				pix = BMP32(roz_bitmap, y & planerenderedsizey)[x & planerenderedsizex];
+				pix = rozbase[(y & planerenderedsizey) * rozpitch + (x & planerenderedsizex)];
 				if (current_tilemap.transparency & STV_TRANSPARENCY_ALPHA)
 				{
 					if ((current_tilemap.transparency & STV_TRANSPARENCY_NONE) || (pix & 0xffffff))
 					{
 						if(current_tilemap.fade_control & 1)
-							vdp2_compute_color_offset_UINT32(&pix,current_tilemap.fade_control & 2);
+							pix = vdp2_apply_color_offset(pix, co_r, co_g, co_b);
 
 						line[hcnt] = stv_alpha_blend_r32( line[hcnt], pix, current_tilemap.alpha );
 					}
@@ -7708,7 +7767,7 @@ static void vdp2_copy_roz_bitmap(struct mame_bitmap *bitmap,
 					if ((current_tilemap.transparency & STV_TRANSPARENCY_NONE) || (pix & 0xffffff))
 					{
 						if(current_tilemap.fade_control & 1)
-							vdp2_compute_color_offset_UINT32(&pix,current_tilemap.fade_control & 2);
+							pix = vdp2_apply_color_offset(pix, co_r, co_g, co_b);
 
 						line[hcnt] = add_blend_r32( line[hcnt], pix );
 					}
@@ -7718,7 +7777,7 @@ static void vdp2_copy_roz_bitmap(struct mame_bitmap *bitmap,
 					if ((current_tilemap.transparency & STV_TRANSPARENCY_NONE) || (pix & 0xffffff))
 					{
 						if(current_tilemap.fade_control & 1)
-							vdp2_compute_color_offset_UINT32(&pix,current_tilemap.fade_control & 2);
+							pix = vdp2_apply_color_offset(pix, co_r, co_g, co_b);
 
 						line[hcnt] = pix;
 					}
