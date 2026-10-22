@@ -2874,6 +2874,7 @@ interleave is tight (32 SCU clocks, about 16 SH-2 cycles) for 1666us after it:
 the two CPUs exchange their jobs through the work RAM right after.
 */
 #define STV_INIT_SLICE		TIME_IN_HZ(57272720 / 32)
+static double stv_init_slice;
 
 static void stv_frt_pulse(int cpu)
 {
@@ -2884,7 +2885,7 @@ static WRITE32_HANDLER( minit_w )
 {
 	log_cb(RETRO_LOG_DEBUG, LOGPRE "cpu #%d (PC=%08X) MINIT write = %08x\n",cpu_getactivecpu(), activecpu_get_pc(),data);
 	if (minit_boost)
-		cpu_boost_interleave(STV_INIT_SLICE, TIME_IN_USEC(minit_boost));
+		cpu_boost_interleave(stv_init_slice, TIME_IN_USEC(minit_boost));
 	timer_set(TIME_NOW, 1, stv_frt_pulse);	/* the slave */
 }
 
@@ -2892,7 +2893,7 @@ static WRITE32_HANDLER( sinit_w )
 {
 	log_cb(RETRO_LOG_DEBUG, LOGPRE "cpu #%d (PC=%08X) SINIT write = %08x\n",cpu_getactivecpu(), activecpu_get_pc(),data);
 	if (sinit_boost)
-		cpu_boost_interleave(STV_INIT_SLICE, TIME_IN_USEC(sinit_boost));
+		cpu_boost_interleave(stv_init_slice, TIME_IN_USEC(sinit_boost));
 	timer_set(TIME_NOW, 0, stv_frt_pulse);	/* the master */
 }
 
@@ -3741,6 +3742,17 @@ MACHINE_INIT( stv )
 	/* time of tight interleave after MINIT / SINIT (MAME's DCC) */
 	minit_boost = 1666;
 	sinit_boost = 1666;
+	stv_init_slice = STV_INIT_SLICE;
+
+	/* twcup98 computes on both CPUs for most of that window: it needs
+	   much less (MAME 0.264 gives it 400us of 5us slices, it locks up
+	   from 7us), and runs a third faster with 400us of 2us slices */
+	if (!strcmp(Machine->gamedrv->name, "twcup98"))
+	{
+		minit_boost = 400;
+		sinit_boost = 400;
+		stv_init_slice = TIME_IN_USEC(2);
+	}
 
 	/* puyosun doesn't seem to care */
 	if ((!strcmp(Machine->gamedrv->name,"puyosun")) ||
