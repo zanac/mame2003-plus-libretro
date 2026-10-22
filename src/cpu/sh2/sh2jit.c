@@ -52,6 +52,12 @@ int sh2_jit_available(void)
 
 #include <stddef.h>
 
+#if (defined SLJIT_64BIT_ARCHITECTURE && SLJIT_64BIT_ARCHITECTURE)
+#define JIT_HOST64		1
+#else
+#define JIT_HOST64		0
+#endif
+
 #define JIT_TABLE_BITS		16
 #define JIT_TABLE_SIZE		(1 << JIT_TABLE_BITS)
 #define JIT_MAX_BLOCK		64				/* instructions */
@@ -329,7 +335,7 @@ static void jit_decode(UINT16 op, UINT16 next, struct jit_op *o)
 		case 0: case 1: case 2: case 4: case 5: case 6:
 			o->kind = JIT_MEM; o->store = 1;
 			break;
-		case 7: case 12:		/* DIV0S, CMP/STR */
+		case 12:				/* CMP/STR */
 			o->kind = JIT_HELPER;
 			break;
 		}
@@ -338,11 +344,11 @@ static void jit_decode(UINT16 op, UINT16 next, struct jit_op *o)
 	case 3:
 		switch (op & 15)
 		{
-		case 4: case 10: case 11: case 14: case 15:	/* DIV1, SUBC, SUBV, ADDC, ADDV */
+		case 11: case 15:		/* SUBV, ADDV */
 			o->kind = JIT_HELPER;
 			break;
 		case 5: case 13:		/* DMULU, DMULS */
-			o->kind = JIT_HELPER; o->cost = 2;
+			o->cost = o->acct = 2;
 			break;
 		}
 		break;
@@ -382,9 +388,6 @@ static void jit_decode(UINT16 op, UINT16 next, struct jit_op *o)
 		case 0x1b:				/* TAS.B */
 			o->kind = JIT_HELPER_MEM; o->cost = 4; o->store = 1;
 			break;
-		case 0x24: case 0x25:	/* ROTCL, ROTCR */
-			o->kind = JIT_HELPER;
-			break;
 		}
 		break;
 
@@ -397,9 +400,6 @@ static void jit_decode(UINT16 op, UINT16 next, struct jit_op *o)
 		{
 		case 0: case 1: case 2: case 4: case 5: case 6:
 			o->kind = JIT_MEM;
-			break;
-		case 10:				/* NEGC */
-			o->kind = JIT_HELPER;
 			break;
 		}
 		break;
@@ -573,6 +573,83 @@ static void jit_emit_helper(struct sljit_compiler *C, UINT16 op)
 }
 
 
+/*
+	DIV1 Rm,Rn. With Qn the old bit 31 of Rn, Rn = Rn << 1 | T, then Rm
+	is subtracted when the old Q equals M, added otherwise; c is the
+	borrow or carry. The interpreter's four cases reduce to
+	Q = Qn ^ c ^ M and T = !(Qn ^ c).
+*/
+static void jit_emit_div1(struct sljit_compiler *C, int n, int m)
+{
+	struct sljit_jump *add, *done;
+
+	sljit_emit_op1(C, SLJIT_MOV32, SLJIT_R2, 0, JREG(n));
+	sljit_emit_op1(C, SLJIT_MOV32, SLJIT_R3, 0, JSR_);
+	/* R1 = Rn << 1 | T */
+	sljit_emit_op2(C, SLJIT_SHL32, SLJIT_R1, 0, SLJIT_R2, 0, SLJIT_IMM, 1);
+	sljit_emit_op2(C, SLJIT_AND32, SLJIT_R0, 0, SLJIT_R3, 0, SLJIT_IMM, T);
+	sljit_emit_op2(C, SLJIT_OR32, SLJIT_R1, 0, SLJIT_R1, 0, SLJIT_R0, 0);
+	/* R2 = Qn */
+	sljit_emit_op2(C, SLJIT_LSHR32, SLJIT_R2, 0, SLJIT_R2, 0, SLJIT_IMM, 31);
+	/* R0 = (old Q ^ M) & 1: 1 adds, 0 subtracts */
+	sljit_emit_op2(C, SLJIT_LSHR32, SLJIT_R0, 0, SLJIT_R3, 0, SLJIT_IMM, 1);
+	sljit_emit_op2(C, SLJIT_XOR32, SLJIT_R0, 0, SLJIT_R0, 0, SLJIT_R3, 0);
+	sljit_emit_op2u(C, SLJIT_AND32 | SLJIT_SET_Z, SLJIT_R0, 0, SLJIT_IMM, Q);
+	add = sljit_emit_jump(C, SLJIT_NOT_ZERO);
+	sljit_emit_op2(C, SLJIT_SUB32 | SLJIT_SET_CARRY, SLJIT_R1, 0, SLJIT_R1, 0, JREG(m));
+	sljit_emit_op_flags(C, SLJIT_MOV32, SLJIT_R0, 0, SLJIT_CARRY);
+	done = sljit_emit_jump(C, SLJIT_JUMP);
+	sljit_set_label(add, sljit_emit_label(C));
+	sljit_emit_op2(C, SLJIT_ADD32 | SLJIT_SET_CARRY, SLJIT_R1, 0, SLJIT_R1, 0, JREG(m));
+	sljit_emit_op_flags(C, SLJIT_MOV32, SLJIT_R0, 0, SLJIT_CARRY);
+	sljit_set_label(done, sljit_emit_label(C));
+	sljit_emit_op1(C, SLJIT_MOV32, JREG(n), SLJIT_R1, 0);
+	/* R0 = Qn ^ c; T = R0 ^ 1; Q = R0 ^ M */
+	sljit_emit_op2(C, SLJIT_XOR32, SLJIT_R0, 0, SLJIT_R0, 0, SLJIT_R2, 0);
+	sljit_emit_op2(C, SLJIT_LSHR32, SLJIT_R1, 0, SLJIT_R3, 0, SLJIT_IMM, 9);
+	sljit_emit_op2(C, SLJIT_AND32, SLJIT_R1, 0, SLJIT_R1, 0, SLJIT_IMM, 1);
+	sljit_emit_op2(C, SLJIT_XOR32, SLJIT_R1, 0, SLJIT_R1, 0, SLJIT_R0, 0);
+	sljit_emit_op2(C, SLJIT_SHL32, SLJIT_R1, 0, SLJIT_R1, 0, SLJIT_IMM, 8);
+	sljit_emit_op2(C, SLJIT_XOR32, SLJIT_R0, 0, SLJIT_R0, 0, SLJIT_IMM, 1);
+	sljit_emit_op2(C, SLJIT_AND32, SLJIT_R3, 0, SLJIT_R3, 0, SLJIT_IMM, ~(Q | T));
+	sljit_emit_op2(C, SLJIT_OR32, SLJIT_R3, 0, SLJIT_R3, 0, SLJIT_R1, 0);
+	sljit_emit_op2(C, SLJIT_OR32, JSR_, SLJIT_R3, 0, SLJIT_R0, 0);
+}
+
+/* DMULS.L / DMULU.L: the 64-bit product into MACH:MACL */
+static void jit_emit_dmul(struct sljit_compiler *C, int n, int m, int sign)
+{
+#if JIT_HOST64
+	sljit_emit_op1(C, sign ? SLJIT_MOV_S32 : SLJIT_MOV_U32, SLJIT_R0, 0, JREG(n));
+	sljit_emit_op1(C, sign ? SLJIT_MOV_S32 : SLJIT_MOV_U32, SLJIT_R1, 0, JREG(m));
+	sljit_emit_op2(C, SLJIT_MUL, SLJIT_R0, 0, SLJIT_R0, 0, SLJIT_R1, 0);
+	sljit_emit_op2(C, SLJIT_LSHR, SLJIT_R1, 0, SLJIT_R0, 0, SLJIT_IMM, 32);
+#else
+	sljit_emit_op1(C, SLJIT_MOV, SLJIT_R0, 0, JREG(n));
+	sljit_emit_op1(C, SLJIT_MOV, SLJIT_R1, 0, JREG(m));
+	sljit_emit_op0(C, sign ? SLJIT_LMUL_SW : SLJIT_LMUL_UW);
+#endif
+	sljit_emit_op1(C, SLJIT_MOV32, JMACL, SLJIT_R0, 0);
+	sljit_emit_op1(C, SLJIT_MOV32, JMACH, SLJIT_R1, 0);
+}
+
+/*
+	ADDC / SUBC: Rn = Rn +- Rm +- T, T = the carry (borrow) of either
+	step, as the interpreter's two comparisons.
+*/
+static void jit_emit_carry(struct sljit_compiler *C, int n, int m, int sub)
+{
+	sljit_s32 op = sub ? SLJIT_SUB32 : SLJIT_ADD32;
+	sljit_emit_op2(C, op | SLJIT_SET_CARRY, SLJIT_R0, 0, JREG(n), JREG(m));
+	sljit_emit_op_flags(C, SLJIT_MOV32, SLJIT_R2, 0, SLJIT_CARRY);
+	sljit_emit_op2(C, SLJIT_AND32, SLJIT_R1, 0, JSR_, SLJIT_IMM, T);
+	sljit_emit_op2(C, op | SLJIT_SET_CARRY, SLJIT_R0, 0, SLJIT_R0, 0, SLJIT_R1, 0);
+	sljit_emit_op_flags(C, SLJIT_OR32, SLJIT_R2, 0, SLJIT_CARRY);
+	sljit_emit_op1(C, SLJIT_MOV32, JREG(n), SLJIT_R0, 0);
+	sljit_emit_op2(C, SLJIT_AND32, SLJIT_R1, 0, JSR_, SLJIT_IMM, ~T);
+	sljit_emit_op2(C, SLJIT_OR32, JSR_, SLJIT_R1, 0, SLJIT_R2, 0);
+}
+
 /*************************************
  *  Plain instructions
  *
@@ -631,6 +708,17 @@ static void jit_emit_simple(struct jit_ctx *ctx, UINT16 op, UINT32 pc)
 			sljit_emit_op2u(C, SLJIT_AND32 | SLJIT_SET_Z, SLJIT_R0, 0, JREG(m));
 			jit_set_t(C, SLJIT_ZERO);
 			break;
+		case 7:		/* DIV0S: Q = Rn bit 31, M = Rm bit 31, T = Q ^ M */
+			sljit_emit_op2(C, SLJIT_LSHR32, SLJIT_R1, 0, JREG(n), SLJIT_IMM, 31);
+			sljit_emit_op2(C, SLJIT_LSHR32, SLJIT_R2, 0, JREG(m), SLJIT_IMM, 31);
+			sljit_emit_op2(C, SLJIT_AND32, SLJIT_R0, 0, JSR_, SLJIT_IMM, ~(M | Q | T));
+			sljit_emit_op2(C, SLJIT_SHL32, SLJIT_R3, 0, SLJIT_R1, 0, SLJIT_IMM, 8);
+			sljit_emit_op2(C, SLJIT_OR32, SLJIT_R0, 0, SLJIT_R0, 0, SLJIT_R3, 0);
+			sljit_emit_op2(C, SLJIT_SHL32, SLJIT_R3, 0, SLJIT_R2, 0, SLJIT_IMM, 9);
+			sljit_emit_op2(C, SLJIT_OR32, SLJIT_R0, 0, SLJIT_R0, 0, SLJIT_R3, 0);
+			sljit_emit_op2(C, SLJIT_XOR32, SLJIT_R1, 0, SLJIT_R1, 0, SLJIT_R2, 0);
+			sljit_emit_op2(C, SLJIT_OR32, JSR_, SLJIT_R0, 0, SLJIT_R1, 0);
+			break;
 		case 9:  jit_alu(C, SLJIT_AND32, n, JREG(m)); break;
 		case 10: jit_alu(C, SLJIT_XOR32, n, JREG(m)); break;
 		case 11: jit_alu(C, SLJIT_OR32, n, JREG(m)); break;
@@ -664,6 +752,11 @@ static void jit_emit_simple(struct jit_ctx *ctx, UINT16 op, UINT32 pc)
 		case 7:  jit_cmp(C, SLJIT_SIG_GREATER, JREG(n), JREG(m)); break;
 		case 8:  jit_alu(C, SLJIT_SUB32, n, JREG(m)); break;
 		case 12: jit_alu(C, SLJIT_ADD32, n, JREG(m)); break;
+		case 4:  jit_emit_div1(C, n, m); break;
+		case 5:  jit_emit_dmul(C, n, m, 0); break;
+		case 13: jit_emit_dmul(C, n, m, 1); break;
+		case 10: jit_emit_carry(C, n, m, 1); break;	/* SUBC */
+		case 14: jit_emit_carry(C, n, m, 0); break;	/* ADDC */
 		default: break;		/* 1, 9: NOP */
 		}
 		break;
@@ -699,6 +792,20 @@ static void jit_emit_simple(struct jit_ctx *ctx, UINT16 op, UINT32 pc)
 			sljit_emit_op2(C, SLJIT_LSHR32, SLJIT_R0, 0, SLJIT_R2, 0, SLJIT_IMM, 1);
 			sljit_emit_op2(C, SLJIT_SHL32, SLJIT_R1, 0, SLJIT_R2, 0, SLJIT_IMM, 31);
 			sljit_emit_op2(C, SLJIT_OR32, JREG(n), SLJIT_R0, 0, SLJIT_R1, 0);
+			break;
+		case 0x24:				/* ROTCL: T in at bit 0, bit 31 out to T */
+			sljit_emit_op1(C, SLJIT_MOV32, SLJIT_R2, 0, JREG(n));
+			sljit_emit_op2(C, SLJIT_AND32, SLJIT_R3, 0, JSR_, SLJIT_IMM, T);
+			sljit_emit_op2(C, SLJIT_SHL32, SLJIT_R0, 0, SLJIT_R2, 0, SLJIT_IMM, 1);
+			sljit_emit_op2(C, SLJIT_OR32, JREG(n), SLJIT_R0, 0, SLJIT_R3, 0);
+			jit_set_t_bit(C, 31);
+			break;
+		case 0x25:				/* ROTCR: T in at bit 31, bit 0 out to T */
+			sljit_emit_op1(C, SLJIT_MOV32, SLJIT_R2, 0, JREG(n));
+			sljit_emit_op2(C, SLJIT_SHL32, SLJIT_R3, 0, JSR_, SLJIT_IMM, 31);
+			sljit_emit_op2(C, SLJIT_LSHR32, SLJIT_R0, 0, SLJIT_R2, 0, SLJIT_IMM, 1);
+			sljit_emit_op2(C, SLJIT_OR32, JREG(n), SLJIT_R0, 0, SLJIT_R3, 0);
+			jit_set_t_bit(C, 0);
 			break;
 		case 0x08: jit_alu(C, SLJIT_SHL32, n, SLJIT_IMM, 2); break;
 		case 0x09: jit_alu(C, SLJIT_LSHR32, n, SLJIT_IMM, 2); break;
@@ -750,6 +857,15 @@ static void jit_emit_simple(struct jit_ctx *ctx, UINT16 op, UINT32 pc)
 			sljit_emit_op2(C, SLJIT_OR32, JREG(n), SLJIT_R0, 0, SLJIT_R1, 0);
 			break;
 		case 11: sljit_emit_op2(C, SLJIT_SUB32, SLJIT_R0, 0, SLJIT_IMM, 0, JREG(m)); sljit_emit_op1(C, SLJIT_MOV32, JREG(n), SLJIT_R0, 0); break;	/* NEG */
+		case 10:	/* NEGC: Rn = 0 - Rm - T, T = Rm != 0 || T */
+			sljit_emit_op1(C, SLJIT_MOV32, SLJIT_R2, 0, JREG(m));
+			sljit_emit_op2(C, SLJIT_AND32, SLJIT_R3, 0, JSR_, SLJIT_IMM, T);
+			sljit_emit_op2(C, SLJIT_SUB32, SLJIT_R0, 0, SLJIT_IMM, 0, SLJIT_R2, 0);
+			sljit_emit_op2(C, SLJIT_SUB32, JREG(n), SLJIT_R0, 0, SLJIT_R3, 0);
+			sljit_emit_op2(C, SLJIT_OR32, SLJIT_R2, 0, SLJIT_R2, 0, SLJIT_R3, 0);
+			sljit_emit_op2u(C, SLJIT_SUB32 | SLJIT_SET_Z, SLJIT_R2, 0, SLJIT_IMM, 0);
+			jit_set_t(C, SLJIT_NOT_ZERO);
+			break;
 		case 12: sljit_emit_op1(C, SLJIT_MOV32_U8, SLJIT_R0, 0, JREG(m)); sljit_emit_op1(C, SLJIT_MOV32, JREG(n), SLJIT_R0, 0); break;	/* EXTU.B */
 		case 13: sljit_emit_op1(C, SLJIT_MOV32_U16, SLJIT_R0, 0, JREG(m)); sljit_emit_op1(C, SLJIT_MOV32, JREG(n), SLJIT_R0, 0); break;	/* EXTU.W */
 		case 14: sljit_emit_op1(C, SLJIT_MOV32_S8, SLJIT_R0, 0, JREG(m)); sljit_emit_op1(C, SLJIT_MOV32, JREG(n), SLJIT_R0, 0); break;	/* EXTS.B */
@@ -1099,10 +1215,44 @@ static void jit_emit_helper_mem(struct jit_ctx *ctx, UINT16 op, UINT32 index)
 		int size = (((op >> 12) & 15) == 0) ? 4 : 2;
 		sljit_emit_op1(C, SLJIT_MOV32, SLJIT_R0, 0, JREG(n));
 		jit_emit_mem_check(ctx, size, 0, index);
+		sljit_emit_op1(C, SLJIT_MOV_P, SLJIT_S1, 0, SLJIT_R1, 0);
 		sljit_emit_op1(C, SLJIT_MOV32, SLJIT_R0, 0, JREG(m));
 		if (m == n)
 			sljit_emit_op2(C, SLJIT_ADD32, SLJIT_R0, 0, SLJIT_R0, 0, SLJIT_IMM, size);
 		jit_emit_mem_check(ctx, size, 0, index);
+#if JIT_HOST64
+		if (size == 4)
+		{
+			/*
+				MAC.L without saturation (S clear) in native code: the signed
+				64-bit product added to MACH:MACL, wrapping; with S set the
+				interpreter runs it. The 2 extra cycles are the helper's own
+				on that path, so they are taken here on this one.
+			*/
+			struct sljit_jump *sat, *done;
+			sljit_emit_op2u(C, SLJIT_AND32 | SLJIT_SET_Z, JSR_, SLJIT_IMM, S);
+			sat = sljit_emit_jump(C, SLJIT_NOT_ZERO);
+			sljit_emit_op1(C, SLJIT_MOV_S32, SLJIT_R0, 0, SLJIT_MEM1(SLJIT_S1), 0);
+			sljit_emit_op1(C, SLJIT_MOV_S32, SLJIT_R1, 0, SLJIT_MEM1(SLJIT_R1), 0);
+			sljit_emit_op2(C, SLJIT_MUL, SLJIT_R0, 0, SLJIT_R0, 0, SLJIT_R1, 0);
+			sljit_emit_op1(C, SLJIT_MOV_U32, SLJIT_R2, 0, JMACH);
+			sljit_emit_op2(C, SLJIT_SHL, SLJIT_R2, 0, SLJIT_R2, 0, SLJIT_IMM, 32);
+			sljit_emit_op1(C, SLJIT_MOV_U32, SLJIT_R3, 0, JMACL);
+			sljit_emit_op2(C, SLJIT_OR, SLJIT_R2, 0, SLJIT_R2, 0, SLJIT_R3, 0);
+			sljit_emit_op2(C, SLJIT_ADD, SLJIT_R0, 0, SLJIT_R0, 0, SLJIT_R2, 0);
+			sljit_emit_op1(C, SLJIT_MOV32, JMACL, SLJIT_R0, 0);
+			sljit_emit_op2(C, SLJIT_LSHR, SLJIT_R0, 0, SLJIT_R0, 0, SLJIT_IMM, 32);
+			sljit_emit_op1(C, SLJIT_MOV32, JMACH, SLJIT_R0, 0);
+			sljit_emit_op2(C, SLJIT_ADD32, JREG(n), JREG(n), SLJIT_IMM, 4);
+			sljit_emit_op2(C, SLJIT_ADD32, JREG(m), JREG(m), SLJIT_IMM, 4);
+			jit_emit_sub_cycles(C, 2);
+			done = sljit_emit_jump(C, SLJIT_JUMP);
+			sljit_set_label(sat, sljit_emit_label(C));
+			jit_emit_helper(C, op);
+			sljit_set_label(done, sljit_emit_label(C));
+			return;
+		}
+#endif
 	}
 	else if (((op >> 12) & 15) == 4)
 	{
