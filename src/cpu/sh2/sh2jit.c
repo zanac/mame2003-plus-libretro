@@ -65,9 +65,7 @@ int sh2_jit_available(void)
 #define JIT_MAX_FASTRAM		8
 #define JIT_CODE_BUDGET		(32 * 1024 * 1024)
 
-/* fast RAM granules of 4 bytes: what a CPU may access directly, and which hold translated code */
-#define JIT_SLOW_READ		1
-#define JIT_SLOW_WRITE		2
+/* fast RAM granules of 4 bytes: which hold translated code */
 
 struct jit_fastram
 {
@@ -97,7 +95,20 @@ static struct jit_fastram jit_ram[JIT_MAX_FASTRAM];
 static int jit_ram_count;
 static UINT32 jit_granules;
 static UINT8 *jit_codemap;			/* a granule holds translated code */
-static UINT8 *jit_slowmap[MAX_CPU];	/* per CPU: JIT_SLOW_READ / JIT_SLOW_WRITE */
+/*
+	Per CPU page tables (4 KB pages of the masked address space): the
+	host memory of a page the blocks may read (write) directly, NULL for
+	one that goes through the memory system. A page is direct when it
+	lies in one fast region and no memory handler of that CPU covers any
+	of it; for writes also when it holds no translated code (wbase is
+	the same without that condition, to restore the table on a flush).
+*/
+#define JIT_PAGE_SHIFT		12
+#define JIT_PAGES			((AM + 1) >> JIT_PAGE_SHIFT)
+static UINT8 **jit_rpage[MAX_CPU];
+static UINT8 **jit_wpage[MAX_CPU];
+static UINT8 **jit_wbase[MAX_CPU];
+static UINT8 *jit_codepage;			/* a page holds translated code */
 static struct jit_block *jit_table;
 int sh2_jit_code_present;
 static size_t jit_code_bytes;
@@ -144,6 +155,10 @@ static void jit_flush(void)
 		jit_table[i].valid = 0;
 	}
 	memset(jit_codemap, 0, jit_granules);
+	memset(jit_codepage, 0, JIT_PAGES);
+	for (i = 0; i < MAX_CPU; i++)
+		if (jit_wpage[i])
+			memcpy(jit_wpage[i], jit_wbase[i], JIT_PAGES * sizeof(UINT8 *));
 	sh2_jit_code_present = 0;
 	jit_code_bytes = 0;
 }
@@ -175,37 +190,44 @@ void sh2_jit_ram_written(UINT32 address, UINT32 bytes)
 }
 
 /*
-	What this CPU may access directly: a granule is slow for reads (or
-	writes) unless the memory system maps all of it straight to the host
-	memory of the region, as a RAM bank. Memory handlers a driver
-	installs over the RAM (speedups, protection) keep their granules
-	slow, so the interpreter still goes through them.
+	What this CPU may access directly: the memory system must map a page
+	straight to the host memory of the region, as a RAM bank. Memory
+	handlers a driver installs over the RAM (speedups, protection) keep
+	their pages on the memory system, so they still run.
 */
-static UINT8 *jit_build_slowmap(int cpunum)
+static int jit_build_pages(int cpunum)
 {
-	UINT8 *map = calloc(jit_granules, 1);
-	int i;
+	UINT32 p;
 
-	if (!map)
-		return NULL;
-	for (i = 0; i < jit_ram_count; i++)
+	jit_rpage[cpunum] = calloc(JIT_PAGES, sizeof(UINT8 *));
+	jit_wpage[cpunum] = calloc(JIT_PAGES, sizeof(UINT8 *));
+	jit_wbase[cpunum] = calloc(JIT_PAGES, sizeof(UINT8 *));
+	if (!jit_rpage[cpunum] || !jit_wpage[cpunum] || !jit_wbase[cpunum])
+		return 0;
+	for (p = 0; p < JIT_PAGES; p++)
 	{
-		struct jit_fastram *ram = &jit_ram[i];
-		UINT32 a;
-		for (a = ram->start; a <= ram->end && a >= ram->start; a += 4)
+		UINT32 start = p << JIT_PAGE_SHIFT, a;
+		struct jit_fastram *ram = jit_find_ram(start, 1 << JIT_PAGE_SHIFT);
+		int rd = 1, wr;
+		UINT8 *host;
+
+		if (!ram)
+			continue;
+		host = ram->base + (start - ram->start);
+		wr = !ram->readonly;
+		for (a = 0; a < (1 << JIT_PAGE_SHIFT) && (rd || wr); a += 4)
 		{
-			UINT8 *expect = ram->base + (a - ram->start);
-			UINT8 flags = 0;
-			if ((UINT8 *)memory_get_read_ptr(cpunum, a) != expect || (UINT8 *)memory_get_read_ptr(cpunum, a + 3) != expect + 3)
-				flags |= JIT_SLOW_READ;
-			if (ram->readonly || (UINT8 *)memory_get_write_ptr(cpunum, a) != expect || (UINT8 *)memory_get_write_ptr(cpunum, a + 3) != expect + 3)
-				flags |= JIT_SLOW_WRITE;
-			map[ram->mapoff + ((a - ram->start) >> 2)] = flags;
-			if (a + 4 < a)
-				break;
+			if ((UINT8 *)memory_get_read_ptr(cpunum, start + a) != host + a || (UINT8 *)memory_get_read_ptr(cpunum, start + a + 3) != host + a + 3)
+				rd = 0;
+			if (wr && ((UINT8 *)memory_get_write_ptr(cpunum, start + a) != host + a || (UINT8 *)memory_get_write_ptr(cpunum, start + a + 3) != host + a + 3))
+				wr = 0;
 		}
+		if (rd)
+			jit_rpage[cpunum][p] = host;
+		if (wr)
+			jit_wbase[cpunum][p] = jit_wpage[cpunum][p] = jit_codepage[p] ? NULL : host;
 	}
-	return map;
+	return 1;
 }
 
 void sh2_jit_add_fastram(offs_t start, offs_t end, int readonly, void *base)
@@ -229,10 +251,14 @@ static void jit_exit_all(void)
 	free(jit_codemap);
 	jit_table = NULL;
 	jit_codemap = NULL;
+	free(jit_codepage);
+	jit_codepage = NULL;
 	for (i = 0; i < MAX_CPU; i++)
 	{
-		free(jit_slowmap[i]);
-		jit_slowmap[i] = NULL;
+		free(jit_rpage[i]);
+		free(jit_wpage[i]);
+		free(jit_wbase[i]);
+		jit_rpage[i] = jit_wpage[i] = jit_wbase[i] = NULL;
 	}
 	jit_enabled = 0;
 }
@@ -245,12 +271,15 @@ void sh2_jit_set(int enable)
 			return;
 		jit_table = calloc(JIT_TABLE_SIZE, sizeof(jit_table[0]));
 		jit_codemap = calloc(jit_granules, 1);
-		if (!jit_table || !jit_codemap)
+		jit_codepage = calloc(JIT_PAGES, 1);
+		if (!jit_table || !jit_codemap || !jit_codepage)
 		{
 			free(jit_table);
 			free(jit_codemap);
+			free(jit_codepage);
 			jit_table = NULL;
 			jit_codemap = NULL;
+			jit_codepage = NULL;
 			return;
 		}
 		jit_enabled = 1;
@@ -498,7 +527,8 @@ static void jit_decode(UINT16 op, UINT16 next, struct jit_op *o)
 #define JPR				JMEM(offsetof(SH2, pr))
 #define JMACH			JMEM(offsetof(SH2, mach))
 #define JMACL			JMEM(offsetof(SH2, macl))
-#define JSLOW			JMEM(offsetof(SH2, jit_slow))
+#define JRPAGE			JMEM(offsetof(SH2, jit_rpage))
+#define JWPAGE			JMEM(offsetof(SH2, jit_wpage))
 
 /* translation context of one block */
 struct jit_ctx
@@ -1013,18 +1043,18 @@ static void jit_emit_mem_ea(struct sljit_compiler *C, UINT16 op, UINT32 pc, cons
 }
 
 /*
-	Host address of the 'size' bytes at R0 into R1, or a side exit before
-	instruction 'index': the access must be aligned, below the special
-	areas (cache, internal registers), in one fast RAM region, in RAM this
-	CPU accesses directly (no memory handler) and, for a store, not over
-	translated code. R0 keeps the masked address.
+	Host address of the 'size' bytes at R0 into R1, through the page
+	table of this CPU. Otherwise the access leaves before instruction
+	'index' for the interpreter, or goes to the 'slow' jumps (the memory
+	system in the block) when given: when it is misaligned (always a side
+	exit), at or above the special areas (cache, internal registers), or
+	in a page the memory system handles or, for a store, that holds
+	translated code. R0 keeps the address.
 */
 static void jit_emit_mem_check(struct jit_ctx *ctx, int size, int store, UINT32 index, struct sljit_jump **slow, int *nslow)
 {
 	struct sljit_compiler *C = ctx->C;
-	struct sljit_jump *found[JIT_MAX_FASTRAM];
-	struct sljit_label *ready;
-	int i, n = 0;
+	struct sljit_jump *jump;
 
 	if (size > 1)
 	{
@@ -1033,61 +1063,34 @@ static void jit_emit_mem_check(struct jit_ctx *ctx, int size, int store, UINT32 
 	}
 	/* 0x40000000 and up: the interpreter's special areas */
 	sljit_emit_op2u(C, SLJIT_AND32 | SLJIT_SET_Z, SLJIT_R0, 0, SLJIT_IMM, (sljit_sw)(INT32)0xc0000000);
+	jump = sljit_emit_jump(C, SLJIT_NOT_ZERO);
 	if (slow)
-		slow[(*nslow)++] = sljit_emit_jump(C, SLJIT_NOT_ZERO);
+		slow[(*nslow)++] = jump;
 	else
-		jit_add_exit(ctx, sljit_emit_jump(C, SLJIT_NOT_ZERO), index);
-	sljit_emit_op2(C, SLJIT_AND32, SLJIT_R0, 0, SLJIT_R0, 0, SLJIT_IMM, AM);
-	sljit_emit_op1(C, SLJIT_MOV_U32, SLJIT_R0, 0, SLJIT_R0, 0);
+		jit_add_exit(ctx, jump, index);
 
-	for (i = 0; i < jit_ram_count; i++)
-	{
-		struct jit_fastram *ram = &jit_ram[i];
-		struct sljit_jump *miss;
-
-		if (ram->readonly && store)
-			continue;
-		/* R1 = offset in the region */
-		sljit_emit_op2(C, SLJIT_SUB, SLJIT_R1, 0, SLJIT_R0, 0, SLJIT_IMM, (sljit_sw)ram->start);
-		sljit_emit_op1(C, SLJIT_MOV_U32, SLJIT_R1, 0, SLJIT_R1, 0);
-		miss = sljit_emit_cmp(C, SLJIT_GREATER, SLJIT_R1, 0, SLJIT_IMM, (sljit_sw)(ram->end - ram->start - (size - 1)));
-
-		/* R2 = granule: no handler of this CPU there, no translated code for a store */
-		sljit_emit_op2(C, SLJIT_LSHR, SLJIT_R2, 0, SLJIT_R1, 0, SLJIT_IMM, 2);
-		sljit_emit_op2(C, SLJIT_ADD, SLJIT_R2, 0, SLJIT_R2, 0, SLJIT_IMM, (sljit_sw)ram->mapoff);
-		sljit_emit_op1(C, SLJIT_MOV_P, SLJIT_R3, 0, JSLOW);
-		sljit_emit_op1(C, SLJIT_MOV_U8, SLJIT_R3, 0, SLJIT_MEM2(SLJIT_R3, SLJIT_R2), 0);
-		sljit_emit_op2u(C, SLJIT_AND | SLJIT_SET_Z, SLJIT_R3, 0, SLJIT_IMM, store ? JIT_SLOW_WRITE : JIT_SLOW_READ);
-		if (slow)
-			slow[(*nslow)++] = sljit_emit_jump(C, SLJIT_NOT_ZERO);
-		else
-			jit_add_exit(ctx, sljit_emit_jump(C, SLJIT_NOT_ZERO), index);
-		if (store)
-		{
-			sljit_emit_op1(C, SLJIT_MOV_P, SLJIT_R3, 0, SLJIT_IMM, (sljit_sw)jit_codemap);
-			sljit_emit_op1(C, SLJIT_MOV_U8, SLJIT_R3, 0, SLJIT_MEM2(SLJIT_R3, SLJIT_R2), 0);
-			jit_add_exit(ctx, sljit_emit_cmp(C, SLJIT_NOT_EQUAL, SLJIT_R3, 0, SLJIT_IMM, 0), index);
-		}
-
-		/* the memory system keeps 32-bit big-endian words in host order */
-		if (size == 1)
-			sljit_emit_op2(C, SLJIT_XOR, SLJIT_R1, 0, SLJIT_R1, 0, SLJIT_IMM, 3);
-		else if (size == 2)
-			sljit_emit_op2(C, SLJIT_XOR, SLJIT_R1, 0, SLJIT_R1, 0, SLJIT_IMM, 2);
-		sljit_emit_op2(C, SLJIT_ADD, SLJIT_R1, 0, SLJIT_R1, 0, SLJIT_IMM, (sljit_sw)ram->base);
-		found[n++] = sljit_emit_jump(C, SLJIT_JUMP);
-		sljit_set_label(miss, sljit_emit_label(C));
-	}
-
-	/* not fast RAM: let the interpreter do it (or the slow path) */
+	/* R3 = the page's host memory */
+	sljit_emit_op2(C, SLJIT_AND32, SLJIT_R1, 0, SLJIT_R0, 0, SLJIT_IMM, AM);
+	sljit_emit_op1(C, SLJIT_MOV_U32, SLJIT_R1, 0, SLJIT_R1, 0);
+	sljit_emit_op2(C, SLJIT_LSHR, SLJIT_R2, 0, SLJIT_R1, 0, SLJIT_IMM, JIT_PAGE_SHIFT);
+	if (store)
+		sljit_emit_op1(C, SLJIT_MOV_P, SLJIT_R3, 0, JWPAGE);
+	else
+		sljit_emit_op1(C, SLJIT_MOV_P, SLJIT_R3, 0, JRPAGE);
+	sljit_emit_op1(C, SLJIT_MOV_P, SLJIT_R3, 0, SLJIT_MEM2(SLJIT_R3, SLJIT_R2), SLJIT_WORD_SHIFT);
+	jump = sljit_emit_cmp(C, SLJIT_EQUAL, SLJIT_R3, 0, SLJIT_IMM, 0);
 	if (slow)
-		slow[(*nslow)++] = sljit_emit_jump(C, SLJIT_JUMP);
+		slow[(*nslow)++] = jump;
 	else
-		jit_add_exit(ctx, sljit_emit_jump(C, SLJIT_JUMP), index);
+		jit_add_exit(ctx, jump, index);
 
-	ready = sljit_emit_label(C);
-	for (i = 0; i < n; i++)
-		sljit_set_label(found[i], ready);
+	/* the memory system keeps 32-bit big-endian words in host order */
+	sljit_emit_op2(C, SLJIT_AND, SLJIT_R1, 0, SLJIT_R1, 0, SLJIT_IMM, (1 << JIT_PAGE_SHIFT) - 1);
+	if (size == 1)
+		sljit_emit_op2(C, SLJIT_XOR, SLJIT_R1, 0, SLJIT_R1, 0, SLJIT_IMM, 3);
+	else if (size == 2)
+		sljit_emit_op2(C, SLJIT_XOR, SLJIT_R1, 0, SLJIT_R1, 0, SLJIT_IMM, 2);
+	sljit_emit_op2(C, SLJIT_ADD, SLJIT_R1, 0, SLJIT_R1, 0, SLJIT_R3, 0);
 }
 
 #ifdef SH2JIT_VERIFY
@@ -1280,6 +1283,49 @@ static sljit_s32 SLJIT_FUNC jit_slow_read(sljit_u32 ea, sljit_u32 size)
 	return v;
 }
 
+static void SLJIT_FUNC jit_slow_write(sljit_u32 ea, sljit_u32 v, sljit_u32 size)
+{
+	int before = sh2_icount;
+
+	jit_in_block = 1;
+	if (size == 1)
+		WB(ea, (UINT8)v);
+	else if (size == 2)
+		WW(ea, (UINT16)v);
+	else
+		WL(ea, v);
+	jit_in_block = 0;
+	jit_slow_break = (sh2_icount != before || sh2.test_irq || jit_flush_pending);
+}
+
+/* a store's data into R1 (before the registers change) */
+static void jit_emit_store_data(struct sljit_compiler *C, UINT16 op)
+{
+	int m = OPM(op);
+
+	switch ((op >> 12) & 15)
+	{
+	case 4:
+		switch (op & 0x3f)
+		{
+		case 0x02: sljit_emit_op1(C, SLJIT_MOV32, SLJIT_R1, 0, JMEM(offsetof(SH2, mach))); break;
+		case 0x12: sljit_emit_op1(C, SLJIT_MOV32, SLJIT_R1, 0, JMEM(offsetof(SH2, macl))); break;
+		case 0x22: sljit_emit_op1(C, SLJIT_MOV32, SLJIT_R1, 0, JMEM(offsetof(SH2, pr))); break;
+		case 0x03: sljit_emit_op1(C, SLJIT_MOV32, SLJIT_R1, 0, JMEM(offsetof(SH2, sr))); break;
+		case 0x13: sljit_emit_op1(C, SLJIT_MOV32, SLJIT_R1, 0, JMEM(offsetof(SH2, gbr))); break;
+		default:   sljit_emit_op1(C, SLJIT_MOV32, SLJIT_R1, 0, JMEM(offsetof(SH2, vbr))); break;	/* 0x23 */
+		}
+		break;
+	case 8:		/* MOV.B/W R0,@(disp,Rn) */
+	case 12:	/* MOV.x R0,@(disp,GBR) */
+		sljit_emit_op1(C, SLJIT_MOV32, SLJIT_R1, 0, JREG(0));
+		break;
+	default:	/* Rm,@(R0,Rn), Rm,@(disp,Rn), Rm,@Rn, Rm,@-Rn */
+		sljit_emit_op1(C, SLJIT_MOV32, SLJIT_R1, 0, JREG(m));
+		break;
+	}
+}
+
 static void jit_emit_mem(struct jit_ctx *ctx, UINT16 op, UINT32 pc, UINT32 index)
 {
 	struct sljit_compiler *C = ctx->C;
@@ -1291,7 +1337,7 @@ static void jit_emit_mem(struct jit_ctx *ctx, UINT16 op, UINT32 pc, UINT32 index
 
 	jit_mem_info(op, &mi);
 	/* not in a delay slot (the slot's address is not its block index) */
-	slowread = !mi.store && pc == ctx->pc + index * 2;
+	slowread = pc == ctx->pc + index * 2;
 #ifdef SH2JIT_VERIFY
 	/* the check runs the block twice: a handler must not see a read twice */
 	slowread = 0;
@@ -1306,16 +1352,32 @@ static void jit_emit_mem(struct jit_ctx *ctx, UINT16 op, UINT32 pc, UINT32 index
 	label = sljit_emit_label(C);
 	for (i = 0; i < nslow; i++)
 		sljit_set_label(slow[i], label);
-	/* R0 = the address (masked when below the special areas, as the interpreter does) */
+	/* R0 = the address: the memory system does the access as in the interpreter */
 	jit_emit_sub_cycles(C, ctx->pre[index]);
 	sljit_emit_op1(C, SLJIT_MOV32, JMEM(offsetof(SH2, pc)), SLJIT_IMM, (sljit_sw)(INT32)(pc + 2));
 	sljit_emit_op1(C, SLJIT_MOV32, JMEM(offsetof(SH2, ppc)), SLJIT_IMM, (sljit_sw)(INT32)(pc + 2));
-	sljit_emit_op1(C, SLJIT_MOV32, SLJIT_R1, 0, SLJIT_IMM, mi.size);
-	sljit_emit_icall(C, SLJIT_CALL, SLJIT_ARGS2(32, 32, 32), SLJIT_IMM, SLJIT_FUNC_ADDR(jit_slow_read));
-	sljit_emit_op1(C, SLJIT_MOV32, SLJIT_R2, 0, SLJIT_RETURN_REG, 0);
+	if (mi.store)
+	{
+		jit_emit_store_data(C, op);
+		sljit_emit_op1(C, SLJIT_MOV32, SLJIT_R2, 0, SLJIT_IMM, mi.size);
+		sljit_emit_icall(C, SLJIT_CALL, SLJIT_ARGS3V(32, 32, 32), SLJIT_IMM, SLJIT_FUNC_ADDR(jit_slow_write));
+	}
+	else
+	{
+		sljit_emit_op1(C, SLJIT_MOV32, SLJIT_R1, 0, SLJIT_IMM, mi.size);
+		sljit_emit_icall(C, SLJIT_CALL, SLJIT_ARGS2(32, 32, 32), SLJIT_IMM, SLJIT_FUNC_ADDR(jit_slow_read));
+		sljit_emit_op1(C, SLJIT_MOV32, SLJIT_R2, 0, SLJIT_RETURN_REG, 0);
+	}
 	if (ctx->pre[index])
 		sljit_emit_op2(C, SLJIT_ADD32, SLJIT_MEM0(), (sljit_sw)&sh2_icount, SLJIT_MEM0(), (sljit_sw)&sh2_icount, SLJIT_IMM, ctx->pre[index]);
-	jit_emit_load_result(C, op, &mi);
+	if (mi.store)
+	{
+		/* @-Rn: Rn changes after the store (the interpreter's order makes no difference) */
+		if ((((op >> 12) & 15) == 2 && (op & 4)) || ((op >> 12) & 15) == 4)
+			sljit_emit_op2(C, SLJIT_SUB32, JREG(OPN(op)), JREG(OPN(op)), SLJIT_IMM, mi.size);
+	}
+	else
+		jit_emit_load_result(C, op, &mi);
 	jit_add_exit(ctx, sljit_emit_cmp(C, SLJIT_NOT_EQUAL | SLJIT_32, SLJIT_MEM0(), (sljit_sw)&jit_slow_break, SLJIT_IMM, 0), index + 1);
 
 	sljit_set_label(done, sljit_emit_label(C));
@@ -1894,8 +1956,17 @@ static void jit_compile(struct jit_block *block, UINT32 pc)
 	{
 		UINT32 first = ram->mapoff + (((pc & AM) - ram->start) >> 2);
 		UINT32 last = ram->mapoff + (((pc & AM) + count * 2 - 1 - ram->start) >> 2);
+		UINT32 p, c;
 		for (i = first; i <= last; i++)
 			jit_codemap[i] = 1;
+		/* stores to these pages go through the memory system, which flushes on code */
+		for (p = (pc & AM) >> JIT_PAGE_SHIFT; p <= ((pc & AM) + count * 2 - 1) >> JIT_PAGE_SHIFT; p++)
+		{
+			jit_codepage[p] = 1;
+			for (c = 0; c < MAX_CPU; c++)
+				if (jit_wpage[c])
+					jit_wpage[c][p] = NULL;
+		}
 		sh2_jit_code_present = 1;
 	}
 }
@@ -1923,14 +1994,13 @@ static INLINE int sh2_jit_run(void)
 	}
 	if (!block->cost || block->cost > sh2_icount)
 		return 0;
-	if (!sh2.jit_slow)
+	if (!sh2.jit_rpage)
 	{
 		int cpu = cpu_getactivecpu();
-		if (!jit_slowmap[cpu])
-			jit_slowmap[cpu] = jit_build_slowmap(cpu);
-		sh2.jit_slow = jit_slowmap[cpu];
-		if (!sh2.jit_slow)
+		if (!jit_rpage[cpu] && !jit_build_pages(cpu))
 			return 0;
+		sh2.jit_rpage = jit_rpage[cpu];
+		sh2.jit_wpage = jit_wpage[cpu];
 	}
 	before = sh2_icount;
 #ifdef SH2JIT_VERIFY

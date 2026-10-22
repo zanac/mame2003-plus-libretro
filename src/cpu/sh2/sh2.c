@@ -148,7 +148,8 @@ typedef struct
 	data16_t (*opcode_read)(offs_t pc);
 	data32_t (*dma_read_hook)(UINT32 src, UINT32 dst, data32_t data, int size);
 
-	UINT8	*jit_slow;		/* sh2jit.c: the RAM granules this CPU accesses through handlers */
+	UINT8	**jit_rpage;	/* sh2jit.c: this CPU's page tables for direct reads and writes */
+	UINT8	**jit_wpage;
 } SH2;
 
 int sh2_icount;
