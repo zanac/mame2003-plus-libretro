@@ -3664,6 +3664,15 @@ DRIVER_INIT ( stv )
 		sh2_jit_add_fastram(0x00000000, 0x0007ffff, 1, memory_region(REGION_CPU1));
 		sh2_jit_add_fastram(0x00200000, 0x002fffff, 0, stv_workram_l);
 		sh2_jit_add_fastram(0x06000000, 0x060fffff, 0, stv_workram_h);
+		/* the cartridge ROM, as far as it goes (the protection and */
+		/* decompression handlers some games install there stay in use) */
+		if (memory_region_length(REGION_USER1) >= 4)
+		{
+			UINT32 len = memory_region_length(REGION_USER1);
+			if (len > 0x3000000)
+				len = 0x3000000;
+			sh2_jit_add_fastram(0x02000000, 0x02000000 + (len & ~3) - 1, 1, memory_region(REGION_USER1));
+		}
 		sh2_jit_set(1);
 	}
 

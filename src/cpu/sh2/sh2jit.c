@@ -118,12 +118,23 @@ static INLINE struct jit_fastram *jit_find_ram(UINT32 address, UINT32 size)
 	return NULL;
 }
 
+static int jit_in_block;			/* a memory handler runs inside a block */
+static int jit_flush_pending;		/* flush once that block has returned */
+
 static void jit_flush(void)
 {
 	int i;
 
 	if (!jit_table)
 		return;
+	/* the running block's code must stay until it returns */
+	if (jit_in_block)
+	{
+		jit_flush_pending = 1;
+		for (i = 0; i < JIT_TABLE_SIZE; i++)
+			jit_table[i].entry = NULL;
+		return;
+	}
 	for (i = 0; i < JIT_TABLE_SIZE; i++)
 	{
 		if (jit_table[i].code)
@@ -1008,7 +1019,7 @@ static void jit_emit_mem_ea(struct sljit_compiler *C, UINT16 op, UINT32 pc, cons
 	CPU accesses directly (no memory handler) and, for a store, not over
 	translated code. R0 keeps the masked address.
 */
-static void jit_emit_mem_check(struct jit_ctx *ctx, int size, int store, UINT32 index)
+static void jit_emit_mem_check(struct jit_ctx *ctx, int size, int store, UINT32 index, struct sljit_jump **slow, int *nslow)
 {
 	struct sljit_compiler *C = ctx->C;
 	struct sljit_jump *found[JIT_MAX_FASTRAM];
@@ -1022,7 +1033,10 @@ static void jit_emit_mem_check(struct jit_ctx *ctx, int size, int store, UINT32 
 	}
 	/* 0x40000000 and up: the interpreter's special areas */
 	sljit_emit_op2u(C, SLJIT_AND32 | SLJIT_SET_Z, SLJIT_R0, 0, SLJIT_IMM, (sljit_sw)(INT32)0xc0000000);
-	jit_add_exit(ctx, sljit_emit_jump(C, SLJIT_NOT_ZERO), index);
+	if (slow)
+		slow[(*nslow)++] = sljit_emit_jump(C, SLJIT_NOT_ZERO);
+	else
+		jit_add_exit(ctx, sljit_emit_jump(C, SLJIT_NOT_ZERO), index);
 	sljit_emit_op2(C, SLJIT_AND32, SLJIT_R0, 0, SLJIT_R0, 0, SLJIT_IMM, AM);
 	sljit_emit_op1(C, SLJIT_MOV_U32, SLJIT_R0, 0, SLJIT_R0, 0);
 
@@ -1044,7 +1058,10 @@ static void jit_emit_mem_check(struct jit_ctx *ctx, int size, int store, UINT32 
 		sljit_emit_op1(C, SLJIT_MOV_P, SLJIT_R3, 0, JSLOW);
 		sljit_emit_op1(C, SLJIT_MOV_U8, SLJIT_R3, 0, SLJIT_MEM2(SLJIT_R3, SLJIT_R2), 0);
 		sljit_emit_op2u(C, SLJIT_AND | SLJIT_SET_Z, SLJIT_R3, 0, SLJIT_IMM, store ? JIT_SLOW_WRITE : JIT_SLOW_READ);
-		jit_add_exit(ctx, sljit_emit_jump(C, SLJIT_NOT_ZERO), index);
+		if (slow)
+			slow[(*nslow)++] = sljit_emit_jump(C, SLJIT_NOT_ZERO);
+		else
+			jit_add_exit(ctx, sljit_emit_jump(C, SLJIT_NOT_ZERO), index);
 		if (store)
 		{
 			sljit_emit_op1(C, SLJIT_MOV_P, SLJIT_R3, 0, SLJIT_IMM, (sljit_sw)jit_codemap);
@@ -1062,8 +1079,11 @@ static void jit_emit_mem_check(struct jit_ctx *ctx, int size, int store, UINT32 
 		sljit_set_label(miss, sljit_emit_label(C));
 	}
 
-	/* not fast RAM: let the interpreter do it */
-	jit_add_exit(ctx, sljit_emit_jump(C, SLJIT_JUMP), index);
+	/* not fast RAM: let the interpreter do it (or the slow path) */
+	if (slow)
+		slow[(*nslow)++] = sljit_emit_jump(C, SLJIT_JUMP);
+	else
+		jit_add_exit(ctx, sljit_emit_jump(C, SLJIT_JUMP), index);
 
 	ready = sljit_emit_label(C);
 	for (i = 0; i < n; i++)
@@ -1073,6 +1093,43 @@ static void jit_emit_mem_check(struct jit_ctx *ctx, int size, int store, UINT32 
 #ifdef SH2JIT_VERIFY
 static void SLJIT_FUNC jit_verify_log_store(sljit_up host, sljit_u32 size);
 #endif
+
+/* a load's value (sign extended) is in R2: the register updates */
+static void jit_emit_load_result(struct sljit_compiler *C, UINT16 op, const struct jit_mem *mi)
+{
+	int n = OPN(op), m = OPM(op);
+
+	switch ((op >> 12) & 15)
+	{
+	case 4:		/* LDS.L / LDC.L @Rm+: the load, then Rm += 4 */
+	{
+		size_t field;
+		switch (op & 0x3f)
+		{
+		case 0x06: field = offsetof(SH2, mach); break;
+		case 0x16: field = offsetof(SH2, macl); break;
+		case 0x26: field = offsetof(SH2, pr); break;
+		case 0x17: field = offsetof(SH2, gbr); break;
+		default:   field = offsetof(SH2, vbr); break;	/* 0x27 */
+		}
+		sljit_emit_op1(C, SLJIT_MOV32, JMEM(field), SLJIT_R2, 0);
+		sljit_emit_op2(C, SLJIT_ADD32, JREG(n), JREG(n), SLJIT_IMM, 4);
+		break;
+	}
+	case 6:		/* MOV.x @Rm,Rn / @Rm+,Rn: no increment when n == m */
+		sljit_emit_op1(C, SLJIT_MOV32, JREG(n), SLJIT_R2, 0);
+		if ((op & 4) && n != m)
+			sljit_emit_op2(C, SLJIT_ADD32, JREG(m), JREG(m), SLJIT_IMM, mi->size);
+		break;
+	case 8:		/* MOV.B/W @(disp,Rm),R0 */
+	case 12:	/* MOV.x @(disp,GBR),R0 */
+		sljit_emit_op1(C, SLJIT_MOV32, JREG(0), SLJIT_R2, 0);
+		break;
+	default:	/* MOV.x @(R0,Rm),Rn, MOV.L @(disp,Rm),Rn, MOV.x @(disp,PC),Rn */
+		sljit_emit_op1(C, SLJIT_MOV32, JREG(n), SLJIT_R2, 0);
+		break;
+	}
+}
 
 /* the access through the host pointer in R1, then the register updates */
 static void jit_emit_mem_access(struct sljit_compiler *C, UINT16 op, const struct jit_mem *mi)
@@ -1091,6 +1148,13 @@ static void jit_emit_mem_access(struct sljit_compiler *C, UINT16 op, const struc
 		sljit_emit_op1(C, SLJIT_MOV_P, SLJIT_R1, 0, SLJIT_S1, 0);
 	}
 #endif
+
+	if (!mi->store)
+	{
+		sljit_emit_op1(C, ld, SLJIT_R2, 0, SLJIT_MEM1(SLJIT_R1), 0);
+		jit_emit_load_result(C, op, mi);
+		return;
+	}
 
 	switch ((op >> 12) & 15)
 	{
@@ -1189,13 +1253,72 @@ static void jit_emit_mem_access(struct sljit_compiler *C, UINT16 op, const struc
 	}
 }
 
+/*
+	A load the fast path cannot do (a memory handler, the internal
+	registers): the memory system reads it here, as in the interpreter's
+	step: sh2_icount has the cycles before the instruction and the PC is
+	past it. The block leaves after the instruction when the handler
+	took cycles (a spin or yield hack, the end of the timeslice), raised
+	an interrupt or flushed the translated code.
+*/
+static sljit_u32 jit_slow_break;
+
+static sljit_s32 SLJIT_FUNC jit_slow_read(sljit_u32 ea, sljit_u32 size)
+{
+	int before = sh2_icount;
+	INT32 v;
+
+	jit_in_block = 1;
+	if (size == 1)
+		v = (INT8)RB(ea);
+	else if (size == 2)
+		v = (INT16)RW(ea);
+	else
+		v = (INT32)RL(ea);
+	jit_in_block = 0;
+	jit_slow_break = (sh2_icount != before || sh2.test_irq || jit_flush_pending);
+	return v;
+}
+
 static void jit_emit_mem(struct jit_ctx *ctx, UINT16 op, UINT32 pc, UINT32 index)
 {
+	struct sljit_compiler *C = ctx->C;
+	struct sljit_jump *slow[JIT_MAX_FASTRAM + 2];
+	struct sljit_jump *done;
+	struct sljit_label *label;
 	struct jit_mem mi;
+	int nslow = 0, i, slowread;
+
 	jit_mem_info(op, &mi);
-	jit_emit_mem_ea(ctx->C, op, pc, &mi);
-	jit_emit_mem_check(ctx, mi.size, mi.store, index);
-	jit_emit_mem_access(ctx->C, op, &mi);
+	/* not in a delay slot (the slot's address is not its block index) */
+	slowread = !mi.store && pc == ctx->pc + index * 2;
+#ifdef SH2JIT_VERIFY
+	/* the check runs the block twice: a handler must not see a read twice */
+	slowread = 0;
+#endif
+	jit_emit_mem_ea(C, op, pc, &mi);
+	jit_emit_mem_check(ctx, mi.size, mi.store, index, slowread ? slow : NULL, &nslow);
+	jit_emit_mem_access(C, op, &mi);
+	if (!slowread)
+		return;
+	done = sljit_emit_jump(C, SLJIT_JUMP);
+
+	label = sljit_emit_label(C);
+	for (i = 0; i < nslow; i++)
+		sljit_set_label(slow[i], label);
+	/* R0 = the address (masked when below the special areas, as the interpreter does) */
+	jit_emit_sub_cycles(C, ctx->pre[index]);
+	sljit_emit_op1(C, SLJIT_MOV32, JMEM(offsetof(SH2, pc)), SLJIT_IMM, (sljit_sw)(INT32)(pc + 2));
+	sljit_emit_op1(C, SLJIT_MOV32, JMEM(offsetof(SH2, ppc)), SLJIT_IMM, (sljit_sw)(INT32)(pc + 2));
+	sljit_emit_op1(C, SLJIT_MOV32, SLJIT_R1, 0, SLJIT_IMM, mi.size);
+	sljit_emit_icall(C, SLJIT_CALL, SLJIT_ARGS2(32, 32, 32), SLJIT_IMM, SLJIT_FUNC_ADDR(jit_slow_read));
+	sljit_emit_op1(C, SLJIT_MOV32, SLJIT_R2, 0, SLJIT_RETURN_REG, 0);
+	if (ctx->pre[index])
+		sljit_emit_op2(C, SLJIT_ADD32, SLJIT_MEM0(), (sljit_sw)&sh2_icount, SLJIT_MEM0(), (sljit_sw)&sh2_icount, SLJIT_IMM, ctx->pre[index]);
+	jit_emit_load_result(C, op, &mi);
+	jit_add_exit(ctx, sljit_emit_cmp(C, SLJIT_NOT_EQUAL | SLJIT_32, SLJIT_MEM0(), (sljit_sw)&jit_slow_break, SLJIT_IMM, 0), index + 1);
+
+	sljit_set_label(done, sljit_emit_label(C));
 }
 
 /*
@@ -1214,12 +1337,12 @@ static void jit_emit_helper_mem(struct jit_ctx *ctx, UINT16 op, UINT32 index)
 		/* MAC.L / MAC.W @Rm+,@Rn+: Rn is read first, then Rm (Rn + size when the same) */
 		int size = (((op >> 12) & 15) == 0) ? 4 : 2;
 		sljit_emit_op1(C, SLJIT_MOV32, SLJIT_R0, 0, JREG(n));
-		jit_emit_mem_check(ctx, size, 0, index);
+		jit_emit_mem_check(ctx, size, 0, index, NULL, NULL);
 		sljit_emit_op1(C, SLJIT_MOV_P, SLJIT_S1, 0, SLJIT_R1, 0);
 		sljit_emit_op1(C, SLJIT_MOV32, SLJIT_R0, 0, JREG(m));
 		if (m == n)
 			sljit_emit_op2(C, SLJIT_ADD32, SLJIT_R0, 0, SLJIT_R0, 0, SLJIT_IMM, size);
-		jit_emit_mem_check(ctx, size, 0, index);
+		jit_emit_mem_check(ctx, size, 0, index, NULL, NULL);
 #if JIT_HOST64
 		if (size == 4)
 		{
@@ -1258,7 +1381,7 @@ static void jit_emit_helper_mem(struct jit_ctx *ctx, UINT16 op, UINT32 index)
 	{
 		/* TAS.B @Rn */
 		sljit_emit_op1(C, SLJIT_MOV32, SLJIT_R0, 0, JREG(n));
-		jit_emit_mem_check(ctx, 1, 1, index);
+		jit_emit_mem_check(ctx, 1, 1, index, NULL, NULL);
 		store = 1;
 	}
 	else
@@ -1266,7 +1389,7 @@ static void jit_emit_helper_mem(struct jit_ctx *ctx, UINT16 op, UINT32 index)
 		/* AND.B / OR.B / XOR.B / TST.B #imm,@(R0,GBR) */
 		store = OPN(op) != 12;
 		sljit_emit_op2(C, SLJIT_ADD32, SLJIT_R0, 0, JGBR, JREG(0));
-		jit_emit_mem_check(ctx, 1, store, index);
+		jit_emit_mem_check(ctx, 1, store, index, NULL, NULL);
 	}
 #ifdef SH2JIT_VERIFY
 	if (store)
@@ -1815,9 +1938,20 @@ static INLINE int sh2_jit_run(void)
 #else
 	sh2.pc = ((jit_func)block->code)();
 #endif
+	if (jit_flush_pending)
+	{
+		jit_flush_pending = 0;
+		jit_flush();
+	}
 	if (sh2_icount == before)
 		return 0;
 	change_pc32bedw(sh2.pc & AM);
+	/* an interrupt a memory handler raised is taken after its instruction */
+	if (sh2.test_irq)
+	{
+		CHECK_PENDING_IRQ("sh2_jit_run");
+		sh2.test_irq = 0;
+	}
 	return 1;
 }
 
