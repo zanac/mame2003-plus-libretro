@@ -2191,8 +2191,9 @@ static void stv_slave_irl(int level)
 	if (slave_irl)
 		cpu_set_irq_line(1, slave_irl, CLEAR_LINE);
 	slave_irl = level;
+	/* the DCC drops it once taken, else the handler re-enters until the end of the blank */
 	if (level)
-		cpu_set_irq_line(1, level, ASSERT_LINE);
+		cpu_set_irq_line(1, level, HOLD_LINE);
 }
 
 static void scu_timer1_cb(int param)
