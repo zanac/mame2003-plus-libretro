@@ -5806,6 +5806,15 @@ static void vdp2_drawgfx_alpha(struct mame_bitmap *dest_bmp,const struct rectang
 	}
 }
 
+/* the windows of a line for the current layer settings, refreshed when they change */
+static struct
+{
+	int gen, y, key;
+	int s0, e0, in0;	/* window 0: x range, line inside */
+	int s1, e1, in1;	/* window 1 */
+} vdp2_wline;
+static void vdp2_window_line(int y, int key);
+
 static void vdp2_drawgfx_transpen(struct mame_bitmap *dest_bmp,const struct rectangle *clip,gfx_element *gfx,
 							UINT32 code,UINT32 color, int flipx,int flipy,int offsx,int offsy,
 							int transparency)
@@ -5891,23 +5900,43 @@ static void vdp2_drawgfx_transpen(struct mame_bitmap *dest_bmp,const struct rect
 		return;
 	}
 
-	for (y = sy; y < ey; y++)
+	/* vdp2_window_process with the line's windows read once per row */
 	{
-		UINT8 const *const source = source_base + y_index*gfx->width;
-		UINT32 *const dest = BMP32(dest_bmp, y);
-		int x_index = x_index_base;
-		for (x = sx; x < ex; x++)
+		const int en0 = current_tilemap.window_control.enabled[0];
+		const int en1 = current_tilemap.window_control.enabled[1];
+		const int out0 = !current_tilemap.window_control.area[0];
+		const int out1 = !current_tilemap.window_control.area[1];
+		const int logic_or = current_tilemap.window_control.logic & 1;
+		const int key = (en0 ? 1 : 0) | (en1 ? 2 : 0) | (out0 ? 0 : 4) | (out1 ? 0 : 8);
+		const int opaque = (transparency & STV_TRANSPARENCY_NONE) ? 1 : 0;
+
+		for (y = sy; y < ey; y++)
 		{
-			if(vdp2_window_process(x,y))
+			UINT8 const *const source = source_base + y_index*gfx->width;
+			UINT32 *const dest = BMP32(dest_bmp, y);
+			int x_index = x_index_base;
+			int s0, e0, in0, s1, e1, in1;
+
+			if (vdp2_wline.gen != vdp2_window_cache_gen || vdp2_wline.y != y || vdp2_wline.key != key)
+				vdp2_window_line(y, key);
+			s0 = vdp2_wline.s0; e0 = vdp2_wline.e0; in0 = vdp2_wline.in0;
+			s1 = vdp2_wline.s1; e1 = vdp2_wline.e1; in1 = vdp2_wline.in1;
+
+			for (x = sx; x < ex; x++, x_index += xinc)
 			{
-				int c = (source[x_index]);
-				if ((transparency & STV_TRANSPARENCY_NONE) || (c != 0))
+				int w0 = 1, w1 = 1, c;
+				if (en0)
+					w0 = (in0 && x >= s0 && x <= e0) ^ out0;
+				if (en1)
+					w1 = (in1 && x >= s1 && x <= e1) ^ out1;
+				if (!(logic_or ? (w0 | w1) : (w0 & w1)))
+					continue;
+				c = source[x_index];
+				if (opaque || c != 0)
 					dest[x] = pal[c];
 			}
-
-			x_index += xinc;
+			y_index += yinc;
 		}
-		y_index += yinc;
 	}
 }
 
@@ -9186,13 +9215,6 @@ static INLINE void vdp2_get_window1_coordinates(int *s_x, int *e_x, int *s_y, in
 	*s_x = c_sx; *e_x = c_ex; *s_y = c_sy; *e_y = c_ey;
 }
 
-/* the windows of a line for the current layer settings, refreshed when they change */
-static struct
-{
-	int gen, y, key;
-	int s0, e0, in0;	/* window 0: x range, line inside */
-	int s1, e1, in1;	/* window 1 */
-} vdp2_wline;
 
 static void vdp2_window_line(int y, int key)
 {
