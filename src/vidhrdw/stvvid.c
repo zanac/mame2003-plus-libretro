@@ -422,8 +422,19 @@ static struct
 	UINT32  pen_min[2];
 	UINT32  pen_max[2];
 
+	/* pattern name words written since the last update, redrawn without a full rebuild */
+	UINT32  map_dirty_min[2];
+	UINT32  map_dirty_max[2];
+
 	struct vdp2_tilemap_capabilities layer_data[2];
 } RBG0_cache_data;
+
+/* set while vdp2_draw_basic_tilemap only redraws the cells whose pattern name is in [min, max) */
+static struct
+{
+	int     active;
+	UINT32  min, max;
+} vdp2_cell_redraw;
 
 static UINT8 m_vdpdebug_roz;
 
@@ -5831,26 +5842,57 @@ static void vdp2_drawgfx_transpen(struct mame_bitmap *dest_bmp,const struct rect
 	}
 
 	/* skip if inner loop doesn't draw anything */
-	if (ex > sx)
+	if (ex <= sx)
+		return;
+
+	/* no window on this layer: plain copy loops (the RBG0 cache is drawn this way) */
+	if (!current_tilemap.window_control.enabled[0] && !current_tilemap.window_control.enabled[1])
 	{
+		const int opaque = (transparency & STV_TRANSPARENCY_NONE) ? 1 : 0;
+		const int width = ex - sx;
+
 		for (y = sy; y < ey; y++)
 		{
-			UINT8 const *const source = source_base + y_index*gfx->width;
-			UINT32 *const dest = BMP32(dest_bmp, y);
-			int x_index = x_index_base;
-			for (x = sx; x < ex; x++)
-			{
-				if(vdp2_window_process(x,y))
-				{
-					int c = (source[x_index]);
-					if ((transparency & STV_TRANSPARENCY_NONE) || (c != 0))
-						dest[x] = pal[c];
-				}
+			UINT8 const *source = source_base + y_index*gfx->width + x_index_base;
+			UINT32 *dest = BMP32(dest_bmp, y) + sx;
+			int n;
 
-				x_index += xinc;
+			if (opaque)
+			{
+				for (n = 0; n < width; n++, source += xinc)
+					dest[n] = pal[*source];
+			}
+			else
+			{
+				for (n = 0; n < width; n++, source += xinc)
+				{
+					const int c = *source;
+					if (c != 0)
+						dest[n] = pal[c];
+				}
 			}
 			y_index += yinc;
 		}
+		return;
+	}
+
+	for (y = sy; y < ey; y++)
+	{
+		UINT8 const *const source = source_base + y_index*gfx->width;
+		UINT32 *const dest = BMP32(dest_bmp, y);
+		int x_index = x_index_base;
+		for (x = sx; x < ex; x++)
+		{
+			if(vdp2_window_process(x,y))
+			{
+				int c = (source[x_index]);
+				if ((transparency & STV_TRANSPARENCY_NONE) || (c != 0))
+					dest[x] = pal[c];
+			}
+
+			x_index += xinc;
+		}
+		y_index += yinc;
 	}
 }
 
@@ -6633,6 +6675,28 @@ static void vdp2_draw_basic_tilemap(struct mame_bitmap *bitmap, const struct rec
 
 			newbase = base[map] + page * pgsize_dwords;
 			offs = (ypageoffs * pgtiles_x) + xpageoffs;
+
+			if (vdp2_cell_redraw.active)
+			{
+				/* only the cells with a rewritten pattern name, cleared first like a full rebuild */
+				const UINT32 addr = newbase + ((current_tilemap.pattern_data_size == 1) ? (offs / 2) : offs);
+				const int cellsize = current_tilemap.tile_size ? 16 : 8;
+				struct rectangle cell;
+
+				if (addr < vdp2_cell_redraw.min || addr >= vdp2_cell_redraw.max)
+					continue;
+
+				cell.min_x = drawxpos >> 16;
+				cell.min_y = drawypos >> 16;
+				cell.max_x = cell.min_x + cellsize - 1;
+				cell.max_y = cell.min_y + cellsize - 1;
+				if (cell.min_x < cliprect->min_x) cell.min_x = cliprect->min_x;
+				if (cell.min_y < cliprect->min_y) cell.min_y = cliprect->min_y;
+				if (cell.max_x > cliprect->max_x) cell.max_x = cliprect->max_x;
+				if (cell.max_y > cliprect->max_y) cell.max_y = cliprect->max_y;
+				if (cell.min_x <= cell.max_x && cell.min_y <= cell.max_y)
+					bitmap_fill32(bitmap, &cell, 0);
+			}
 
 /* GET THE TILE INFO ... */
 			/* 1 word per tile mode with supplement bits */
@@ -8306,10 +8370,56 @@ static void vdp2_draw_rotation_screen(struct mame_bitmap *bitmap, const struct r
 		fade_control = current_tilemap.fade_control;
 		current_tilemap.fade_control = 0;
 		{
-			log_masked(LOG_VDP2, "Checking for cached RBG bitmap, cache_dirty = %d, memcmp() = %d\n", RBG0_cache_data.is_cache_dirty, memcmp(&RBG0_cache_data.layer_data[iRP-1],&current_tilemap,sizeof(current_tilemap)));
-			if ( (RBG0_cache_data.is_cache_dirty & iRP) ||
-				memcmp(&RBG0_cache_data.layer_data[iRP-1],&current_tilemap,sizeof(current_tilemap)) != 0 )
+			const int same_layer = !(RBG0_cache_data.is_cache_dirty & iRP) &&
+				memcmp(&RBG0_cache_data.layer_data[iRP-1],&current_tilemap,sizeof(current_tilemap)) == 0;
+			const int map_dirty = RBG0_cache_data.map_dirty_max[iRP-1] > RBG0_cache_data.map_dirty_min[iRP-1];
+
+			if ( same_layer && map_dirty && !current_tilemap.bitmap_enable &&
+				!current_tilemap.linescroll_enable && !current_tilemap.vertical_linescroll_enable &&
+				!current_tilemap.linezoom_enable &&
+				current_tilemap.incx == 0x10000 && current_tilemap.incy == 0x10000 &&
+				!(current_tilemap.transparency & STV_TRANSPARENCY_ADD_BLEND) )
 			{
+				/* - diehard rewrites a few pattern names of its RBG0 map every frame */
+				vdp2_cell_redraw.active = 1;
+				vdp2_cell_redraw.min = RBG0_cache_data.map_dirty_min[iRP-1];
+				vdp2_cell_redraw.max = RBG0_cache_data.map_dirty_max[iRP-1];
+				vdp2_check_tilemap(vdp2l.roz_bitmap[iRP-1], &roz_clip_rect);
+				vdp2_cell_redraw.active = 0;
+
+				/* the redrawn cells may use more characters and colours than the cache watches */
+				if ( vdp2_layer_data.tile_offset_max > vdp2_layer_data.tile_offset_min )
+				{
+					if ( vdp2_layer_data.tile_offset_min < RBG0_cache_data.tile_offset_min[iRP-1] )
+						RBG0_cache_data.tile_offset_min[iRP-1] = vdp2_layer_data.tile_offset_min;
+					if ( vdp2_layer_data.tile_offset_max > RBG0_cache_data.tile_offset_max[iRP-1] )
+						RBG0_cache_data.tile_offset_max[iRP-1] = vdp2_layer_data.tile_offset_max;
+				}
+				if ( vdp2_layer_data.pen_max > 0x800 )
+				{
+					vdp2_layer_data.pen_min = 0;
+					vdp2_layer_data.pen_max = 0x800;
+				}
+				if ( vdp2_layer_data.pen_max > vdp2_layer_data.pen_min )
+				{
+					if ( RBG0_cache_data.pen_max[iRP-1] <= RBG0_cache_data.pen_min[iRP-1] )
+					{
+						RBG0_cache_data.pen_min[iRP-1] = vdp2_layer_data.pen_min;
+						RBG0_cache_data.pen_max[iRP-1] = vdp2_layer_data.pen_max;
+					}
+					else
+					{
+						if ( vdp2_layer_data.pen_min < RBG0_cache_data.pen_min[iRP-1] )
+							RBG0_cache_data.pen_min[iRP-1] = vdp2_layer_data.pen_min;
+						if ( vdp2_layer_data.pen_max > RBG0_cache_data.pen_max[iRP-1] )
+							RBG0_cache_data.pen_max[iRP-1] = vdp2_layer_data.pen_max;
+					}
+				}
+				RBG0_cache_data.map_dirty_min[iRP-1] = RBG0_cache_data.map_dirty_max[iRP-1] = 0;
+			}
+			else if ( !same_layer || map_dirty )
+			{
+				RBG0_cache_data.map_dirty_min[iRP-1] = RBG0_cache_data.map_dirty_max[iRP-1] = 0;
 				bitmap_fill32(vdp2l.roz_bitmap[iRP-1], &roz_clip_rect, 0);
 				vdp2_check_tilemap(vdp2l.roz_bitmap[iRP-1], &roz_clip_rect);
 				if ( current_tilemap.bitmap_enable )
@@ -8540,8 +8650,13 @@ static UINT32 vdp2_vram_r(offs_t offset)
 static void vdp2_vram_w(offs_t offset, UINT32 data, UINT32 mem_mask)
 {
 	UINT8* gfxdata = vdp2l.gfx_decode;
+	const UINT32 old_data = vdp2_vram[offset];
 
 	COMBINE_DATA(&vdp2_vram[offset]);
+
+	/* rewriting the same value leaves the decoded tiles and the RBG0 cache valid */
+	if (vdp2_vram[offset] == old_data)
+		return;
 
 	data = vdp2_vram[offset];
 	/* put in gfx region for easy decoding */
@@ -8555,28 +8670,33 @@ static void vdp2_vram_w(offs_t offset, UINT32 data, UINT32 mem_mask)
 
 	if ( RBG0_cache_data.watch_vdp2_vram_writes )
 	{
-		if ( RBG0_cache_data.watch_vdp2_vram_writes & VDP2_RBG_ROTATION_PARAMETER_A )
+		int i;
+		for (i = 0; i < 2; i++)
 		{
-			if ( (offset >= RBG0_cache_data.map_offset_min[0] &&
-					offset < RBG0_cache_data.map_offset_max[0]) ||
-					(offset >= RBG0_cache_data.tile_offset_min[0] &&
-					offset < RBG0_cache_data.tile_offset_max[0]) )
+			if ( !(RBG0_cache_data.watch_vdp2_vram_writes & (1 << i)) )
+				continue;
+
+			if ( offset >= RBG0_cache_data.tile_offset_min[i] &&
+					offset < RBG0_cache_data.tile_offset_max[i] )
 			{
-				log_masked(LOG_VDP2, "RBG Cache: dirtying for RP = 1, write at offset = %06X\n", offset);
-				RBG0_cache_data.is_cache_dirty |= VDP2_RBG_ROTATION_PARAMETER_A;
-				RBG0_cache_data.watch_vdp2_vram_writes &= ~VDP2_RBG_ROTATION_PARAMETER_A;
+				/* character data changed, rebuild everything */
+				log_masked(LOG_VDP2, "RBG Cache: dirtying for RP = %d, write at offset = %06X\n", i + 1, offset);
+				RBG0_cache_data.is_cache_dirty |= 1 << i;
+				RBG0_cache_data.watch_vdp2_vram_writes &= ~(1 << i);
 			}
-		}
-		if ( RBG0_cache_data.watch_vdp2_vram_writes & VDP2_RBG_ROTATION_PARAMETER_B )
-		{
-			if ( (offset >= RBG0_cache_data.map_offset_min[1] &&
-					offset < RBG0_cache_data.map_offset_max[1]) ||
-					(offset >= RBG0_cache_data.tile_offset_min[1] &&
-					offset < RBG0_cache_data.tile_offset_max[1]) )
+			else if ( offset >= RBG0_cache_data.map_offset_min[i] &&
+					offset < RBG0_cache_data.map_offset_max[i] )
 			{
-				log_masked(LOG_VDP2, "RBG Cache: dirtying for RP = 2, write at offset = %06X\n", offset);
-				RBG0_cache_data.is_cache_dirty |= VDP2_RBG_ROTATION_PARAMETER_B;
-				RBG0_cache_data.watch_vdp2_vram_writes &= ~VDP2_RBG_ROTATION_PARAMETER_B;
+				/* a pattern name changed, only its cells need redrawing */
+				if ( RBG0_cache_data.map_dirty_max[i] <= RBG0_cache_data.map_dirty_min[i] )
+				{
+					RBG0_cache_data.map_dirty_min[i] = offset;
+					RBG0_cache_data.map_dirty_max[i] = offset + 1;
+				}
+				else if ( offset < RBG0_cache_data.map_dirty_min[i] )
+					RBG0_cache_data.map_dirty_min[i] = offset;
+				else if ( offset >= RBG0_cache_data.map_dirty_max[i] )
+					RBG0_cache_data.map_dirty_max[i] = offset + 1;
 			}
 		}
 	}
