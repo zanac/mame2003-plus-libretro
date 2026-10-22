@@ -642,7 +642,6 @@ static int vdp2_start(void);
 static void vdp2_fade_effects(void);
 static INLINE void vdp2_get_window0_coordinates(int *s_x, int *e_x, int *s_y, int *e_y, int y);
 static INLINE void vdp2_get_window1_coordinates(int *s_x, int *e_x, int *s_y, int *e_y, int y);
-static INLINE int get_window_pixel(int s_x,int e_x,int s_y,int e_y,int x, int y,UINT8 win_num);
 static INLINE int vdp2_window_process(int x,int y);
 static int vdp2_apply_window_on_layer(struct rectangle *cliprect);
 static void draw_sprites(struct mame_bitmap *bitmap, const struct rectangle *cliprect, UINT8 pri);
@@ -8997,41 +8996,60 @@ static INLINE void vdp2_get_window1_coordinates(int *s_x, int *e_x, int *s_y, in
 	*s_x = c_sx; *e_x = c_ex; *s_y = c_sy; *e_y = c_ey;
 }
 
-static INLINE int get_window_pixel(int s_x,int e_x,int s_y,int e_y,int x, int y,UINT8 win_num)
+/* the windows of a line for the current layer settings, refreshed when they change */
+static struct
 {
-	int res;
+	int gen, y, key;
+	int s0, e0, in0;	/* window 0: x range, line inside */
+	int s1, e1, in1;	/* window 1 */
+} vdp2_wline;
 
-	res = 1;
-	if(current_tilemap.window_control.enabled[win_num])
-	{
-		if(current_tilemap.window_control.area[win_num])
-			res = (y >= s_y && y <= e_y && x >= s_x && x <= e_x);
-		else
-			res = (y >= s_y && y <= e_y && x >= s_x && x <= e_x) ^ 1;
-	}
-
-	return res;
-}
-
-static INLINE int vdp2_window_process(int x,int y)
+static void vdp2_window_line(int y, int key)
 {
-	int s_x=0,e_x=0,s_y=0,e_y=0;
-	int w0_pix = 1, w1_pix = 1;
+	int s_x = 0, e_x = 0, s_y = 0, e_y = 0;
 
-	if (current_tilemap.window_control.enabled[0] == 0 &&
-		current_tilemap.window_control.enabled[1] == 0)
-		return 1;
-
-	/* a disabled window counts as 1, as in get_window_pixel() */
+	vdp2_wline.gen = vdp2_window_cache_gen;
+	vdp2_wline.y = y;
+	vdp2_wline.key = key;
 	if (current_tilemap.window_control.enabled[0])
 	{
 		vdp2_get_window0_coordinates(&s_x, &e_x, &s_y, &e_y, y);
-		w0_pix = get_window_pixel(s_x,e_x,s_y,e_y,x,y,0);
+		vdp2_wline.s0 = s_x; vdp2_wline.e0 = e_x;
+		vdp2_wline.in0 = (y >= s_y && y <= e_y);
 	}
 	if (current_tilemap.window_control.enabled[1])
 	{
 		vdp2_get_window1_coordinates(&s_x, &e_x, &s_y, &e_y, y);
-		w1_pix = get_window_pixel(s_x,e_x,s_y,e_y,x,y,1);
+		vdp2_wline.s1 = s_x; vdp2_wline.e1 = e_x;
+		vdp2_wline.in1 = (y >= s_y && y <= e_y);
+	}
+}
+
+/* same result as get_window_pixel() on both windows, a disabled window counts as 1 */
+static INLINE int vdp2_window_process(int x,int y)
+{
+	int en0 = current_tilemap.window_control.enabled[0];
+	int en1 = current_tilemap.window_control.enabled[1];
+	int key, w0_pix = 1, w1_pix = 1;
+
+	if (!en0 && !en1)
+		return 1;
+
+	key = (en0 ? 1 : 0) | (en1 ? 2 : 0) | (current_tilemap.window_control.area[0] ? 4 : 0) | (current_tilemap.window_control.area[1] ? 8 : 0);
+	if (vdp2_wline.gen != vdp2_window_cache_gen || vdp2_wline.y != y || vdp2_wline.key != key)
+		vdp2_window_line(y, key);
+
+	if (en0)
+	{
+		w0_pix = vdp2_wline.in0 && x >= vdp2_wline.s0 && x <= vdp2_wline.e0;
+		if (!current_tilemap.window_control.area[0])
+			w0_pix ^= 1;
+	}
+	if (en1)
+	{
+		w1_pix = vdp2_wline.in1 && x >= vdp2_wline.s1 && x <= vdp2_wline.e1;
+		if (!current_tilemap.window_control.area[1])
+			w1_pix ^= 1;
 	}
 
 	return current_tilemap.window_control.logic & 1 ? (w0_pix | w1_pix) : (w0_pix & w1_pix);

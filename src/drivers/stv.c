@@ -2849,20 +2849,33 @@ static WRITE32_HANDLER( stv_scsp_regs_w32 )
 	SCSP_0_w(offset+1, data, mem_mask);
 }
 
-/* communication,SLAVE CPU acquires data from the MASTER CPU and triggers an irq.  *
- * Enter into Radiant Silver Gun specific menu for a test...                       */
+/*
+MINIT / SINIT: one SH-2 pulses the FRT input capture of the other (the DCC,
+315-5778). As in MAME, the pulse happens once the CPUs are in sync, and the
+interleave is tight (32 SCU clocks, about 16 SH-2 cycles) for 1666us after it:
+the two CPUs exchange their jobs through the work RAM right after.
+*/
+#define STV_INIT_SLICE		TIME_IN_HZ(57272720 / 32)
+
+static void stv_frt_pulse(int cpu)
+{
+	sh2_set_frt_input(cpu, PULSE_LINE);
+}
+
 static WRITE32_HANDLER( minit_w )
 {
 	log_cb(RETRO_LOG_DEBUG, LOGPRE "cpu #%d (PC=%08X) MINIT write = %08x\n",cpu_getactivecpu(), activecpu_get_pc(),data);
-	cpu_boost_interleave(0, TIME_IN_USEC(minit_boost));
-	sh2_set_frt_input(1, PULSE_LINE);
+	if (minit_boost)
+		cpu_boost_interleave(STV_INIT_SLICE, TIME_IN_USEC(minit_boost));
+	timer_set(TIME_NOW, 1, stv_frt_pulse);	/* the slave */
 }
 
 static WRITE32_HANDLER( sinit_w )
 {
 	log_cb(RETRO_LOG_DEBUG, LOGPRE "cpu #%d (PC=%08X) SINIT write = %08x\n",cpu_getactivecpu(), activecpu_get_pc(),data);
-	cpu_boost_interleave(0, TIME_IN_USEC(sinit_boost));
-	sh2_set_frt_input(0, PULSE_LINE);
+	if (sinit_boost)
+		cpu_boost_interleave(STV_INIT_SLICE, TIME_IN_USEC(sinit_boost));
+	timer_set(TIME_NOW, 0, stv_frt_pulse);	/* the master */
 }
 
 static READ32_HANDLER( stv_workram_h_mirror_r )
@@ -3687,9 +3700,9 @@ MACHINE_INIT( stv )
 	en_68k = 0;
 	smpc_ram[0x21] = 0x80;
 
-	/* amount of time to boost interleave for on MINIT / SINIT, needed for communication to work */
-	minit_boost = 400;
-	sinit_boost = 400;
+	/* time of tight interleave after MINIT / SINIT (MAME's DCC) */
+	minit_boost = 1666;
+	sinit_boost = 1666;
 
 	/* puyosun doesn't seem to care */
 	if ((!strcmp(Machine->gamedrv->name,"puyosun")) ||
