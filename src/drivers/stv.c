@@ -97,6 +97,7 @@ Preliminary Memory map:
 #include "machine/stvcd.h"
 #include "machine/scudsp.h"
 #include "machine/sega315_5881.h"
+#include "machine/sega315_5838.h"
 #include "state.h"
 #include "includes/stv.h"
 #include <time.h>
@@ -4747,6 +4748,90 @@ static void stv_install_common_protection(UINT32 key)
 	state_save_register_UINT32("stv_abus", 0, "protkey", &stv_abus_protkey, 1);
 }
 
+/***************************************************************************
+    DecAthlete: the 315-5838 decrypter/decompresser of its graphics, as in
+    MAME (stv.cpp init_5838). The source and the tables are written at the
+    top of each 8MB bank of the cartridge, the decoded bytes are read there
+    when the control register selects the decoder.
+***************************************************************************/
+
+static UINT32 stv_5838_bank, stv_5838_source;
+static UINT16 stv_5838_control;
+
+/* the encrypted words, from the bank of the last write */
+static UINT16 stv_5838_source_r(UINT32 offset)
+{
+	UINT32 address = (stv_5838_bank << 23) | ((offset * 2) & 0x007fffff);
+	data32_t data = stv_cart_word32(address & ~3);
+	return (address & 2) ? (data & 0xffff) : (data >> 16);
+}
+
+static WRITE32_HANDLER( stv_5838_w )
+{
+	UINT32 address = offset * 4;
+
+	stv_5838_bank = (address >> 23) & 3;
+	switch (address & 0x007fffff)
+	{
+		case 0x007ffff0:
+			COMBINE_DATA(&stv_5838_source);
+			sega315_5838_source_w(stv_5838_source);
+			break;
+		case 0x007ffff4:
+			if (!(mem_mask & 0xffff0000))
+				sega315_5838_table_w(0, data >> 16);
+			if (!(mem_mask & 0x0000ffff))
+				sega315_5838_table_w(1, data & 0xffff);
+			break;
+	}
+}
+
+static WRITE32_HANDLER( stv_5838_control_w )
+{
+	/* the 16-bit register at 0x04200000 */
+	if (!(mem_mask & 0xffff0000))
+		stv_5838_control = data >> 16;
+}
+
+static data32_t stv_5838_read(int bank, data32_t mem_mask)
+{
+	data32_t result = 0;
+
+	if (!(stv_5838_control & 2))	/* the ROM */
+		return stv_cart_word32(bank * 0x00800000 + 0x007ffff8);
+
+	if (!(mem_mask & 0xffff0000))
+		result |= sega315_5838_data_r() << 16;
+	if (!(mem_mask & 0x0000ffff))
+		result |= sega315_5838_data_r();
+	return result;
+}
+
+static READ32_HANDLER( stv_5838_bank0_r ) { return stv_5838_read(0, mem_mask); }
+static READ32_HANDLER( stv_5838_bank1_r ) { return stv_5838_read(1, mem_mask); }
+static READ32_HANDLER( stv_5838_bank2_r ) { return stv_5838_read(2, mem_mask); }
+
+static DRIVER_INIT( decathlt )
+{
+	init_ic13();
+
+	install_mem_write32_handler(0, 0x02000000, 0x037fffff, stv_5838_w);
+	install_mem_read32_handler(0, 0x027ffff8, 0x027ffffb, stv_5838_bank0_r);
+	install_mem_read32_handler(0, 0x02fffff8, 0x02fffffb, stv_5838_bank1_r);
+	install_mem_read32_handler(0, 0x037ffff8, 0x037ffffb, stv_5838_bank2_r);
+	install_mem_write32_handler(0, 0x04200000, 0x04200003, stv_5838_control_w);
+
+	stv_5838_bank = stv_5838_source = 0;
+	stv_5838_control = 2;	/* DecAthlete reads the decoder without writing the control */
+	sega315_5838_init(stv_5838_source_r);
+	sega315_5838_set_variant(SEGA315_5838_VARIANT_5838);
+	sega315_5838_reset();
+
+	state_save_register_UINT32("stv_5838", 0, "bank", &stv_5838_bank, 1);
+	state_save_register_UINT32("stv_5838", 0, "source", &stv_5838_source, 1);
+	state_save_register_UINT16("stv_5838", 0, "control", &stv_5838_control, 1);
+}
+
 /* the protected carts; the keys are MAME's */
 static DRIVER_INIT( rsgun )    { init_stv();  stv_install_common_protection(0x05272d01); }
 static DRIVER_INIT( ffreveng ) { init_stv();  stv_install_common_protection(0x0524ac01); }
@@ -5025,7 +5110,7 @@ GAMEBX( 1996, stvbios,   0,       stvbios, stv, stv,  stv,       ROT0, "Sega",  
 
 GAMEBX( 1998, astrass,   stvbios, stvbios, stv, stv,  astrass,      ROT0, "Sunsoft",    "Astra SuperStars", GAME_IMPERFECT_SOUND | GAME_IMPERFECT_GRAPHICS, &generic_ctrl, NULL )
 GAMEBX( 1996, batmanfr,  stvbios, stvbios, stv, stv,  ic13,      ROT0, "Acclaim",    "Batman Forever", GAME_IMPERFECT_SOUND | GAME_IMPERFECT_GRAPHICS, &generic_ctrl, NULL )
-GAMEBX( 1995, decathlt,  stvbios, stvbios, stv, stv,  ic13,      ROT0, "Sega", 	     "Decathlete", GAME_NO_SOUND | GAME_NOT_WORKING, &generic_ctrl, NULL )
+GAMEBX( 1996, decathlt,  stvbios, stvbios, stv, stv,  decathlt,  ROT0, "Sega", 	     "Decathlete", GAME_IMPERFECT_SOUND | GAME_IMPERFECT_GRAPHICS, &generic_ctrl, NULL )
 GAMEBX( 1999, ffreveng,  stvbios, stvbios, stv, stv,  ffreveng,       ROT0, "Capcom",     "Final Fight Revenge", GAME_IMPERFECT_SOUND | GAME_IMPERFECT_GRAPHICS, &generic_ctrl, NULL )
 GAMEBX( 1996, findlove,  stvbios, stvbios, stv, stv,  ic13,      ROT0, "Daiki",	     "Find Love", GAME_IMPERFECT_SOUND | GAME_IMPERFECT_GRAPHICS, &generic_ctrl, NULL )
 GAMEBX( 1994, gaxeduel,  stvbios, stvbios, stv, stv,  ic13,      ROT0, "Sega", 	     "Golden Axe - The Duel", GAME_IMPERFECT_SOUND | GAME_IMPERFECT_GRAPHICS, &generic_ctrl, NULL )
