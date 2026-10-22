@@ -2729,6 +2729,8 @@ static UINT32 scu_dma_block(UINT32 *src, UINT32 *dst, UINT32 size, int src_add, 
 	{
 		data16_t data = cpu_readmem32bedw_word(*src & 0x07fffffe);
 		cpu_writemem32bedw_word(*dst & 0x07fffffe, data);
+		if (sh2_jit_code_present)
+			sh2_jit_ram_written(*dst & 0x07fffffe, 2);
 		*src += src_add >> 1;
 		*dst += cbus ? 2 : dst_add;
 		count += 2;
@@ -3653,6 +3655,17 @@ DRIVER_INIT ( stv )
 	cpu_setbank(3,&stv_workram_h[0x000000]);
 	cpu_setbank(4,&stv_workram_l[0x000000]);
 	cpu_setbank(5,&stv_backupram[0x000000]);
+
+	/* the SH-2 recompiler runs code from, and accesses directly, the BIOS */
+	/* and the work RAMs (the handlers a game installs there stay in use) */
+	sh2_jit_set(0);
+	if (options.sh2_dynarec)
+	{
+		sh2_jit_add_fastram(0x00000000, 0x0007ffff, 1, memory_region(REGION_CPU1));
+		sh2_jit_add_fastram(0x00200000, 0x002fffff, 0, stv_workram_l);
+		sh2_jit_add_fastram(0x06000000, 0x060fffff, 0, stv_workram_h);
+		sh2_jit_set(1);
+	}
 
 	/* the cartridge space is 0x02000000-0x04ffffff; past the ROMs it reads
 	   as erased flash (MAME's carts are 0x3000000 bytes, 0xff filled) */

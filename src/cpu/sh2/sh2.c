@@ -147,6 +147,8 @@ typedef struct
 	int     is_slave, cpu_number;
 	data16_t (*opcode_read)(offs_t pc);
 	data32_t (*dma_read_hook)(UINT32 src, UINT32 dst, data32_t data, int size);
+
+	UINT8	*jit_slow;		/* sh2jit.c: the RAM granules this CPU accesses through handlers */
 } SH2;
 
 int sh2_icount;
@@ -178,6 +180,16 @@ static void sh2_timer_callback(int data);
 
 #define Rn	((opcode>>8)&15)
 #define Rm	((opcode>>4)&15)
+
+
+#ifdef SH2JIT_VERIFY
+extern int sh2_jit_verify_logging;
+void sh2_jit_verify_store(UINT32 address, int size);
+#define SH2JIT_STORE(A, size)	do { if (sh2_jit_verify_logging) sh2_jit_verify_store(A, size); if (sh2_jit_code_present) sh2_jit_ram_written((A) & AM, size); } while (0)
+#else
+/* a store over translated code flushes the recompiler's cache */
+#define SH2JIT_STORE(A, size)	do { if (sh2_jit_code_present) sh2_jit_ram_written((A) & AM, size); } while (0)
+#endif
 
 static INLINE data8_t RB(offs_t A)
 {
@@ -233,6 +245,7 @@ static INLINE void WB(offs_t A, data8_t V)
 	if (A >= 0xc0000000)
 	{
 		cpu_writemem32bedw(A,V);
+		SH2JIT_STORE(A, 1);
 		return;
 	}
 
@@ -240,6 +253,7 @@ static INLINE void WB(offs_t A, data8_t V)
 		return;
 
 	cpu_writemem32bedw(A & AM,V);
+	SH2JIT_STORE(A, 1);
 }
 
 static INLINE void WW(offs_t A, data16_t V)
@@ -253,6 +267,7 @@ static INLINE void WW(offs_t A, data16_t V)
 	if (A >= 0xc0000000)
 	{
 		cpu_writemem32bedw_word(A,V);
+		SH2JIT_STORE(A, 2);
 		return;
 	}
 
@@ -260,6 +275,7 @@ static INLINE void WW(offs_t A, data16_t V)
 		return;
 
 	cpu_writemem32bedw_word(A & AM,V);
+	SH2JIT_STORE(A, 2);
 }
 
 static INLINE void WL(offs_t A, data32_t V)
@@ -273,6 +289,7 @@ static INLINE void WL(offs_t A, data32_t V)
 	if (A >= 0xc0000000)
 	{
 		cpu_writemem32bedw_dword(A,V);
+		SH2JIT_STORE(A, 4);
 		return;
 	}
 
@@ -280,6 +297,7 @@ static INLINE void WL(offs_t A, data32_t V)
 		return;
 
 	cpu_writemem32bedw_dword(A & AM,V);
+	SH2JIT_STORE(A, 4);
 }
 
 static INLINE void sh2_exception(const char *message, int irqline)
@@ -2291,6 +2309,61 @@ static INLINE void op1111(UINT16 opcode)
 	NOP();
 }
 
+/* one instruction (in the interpreter's loop and for the recompiler's checks) */
+static INLINE void sh2_dispatch(UINT16 opcode)
+{
+	switch ((opcode >> 12) & 15)
+	{
+	case  0: op0000(opcode); break;
+	case  1: op0001(opcode); break;
+	case  2: op0010(opcode); break;
+	case  3: op0011(opcode); break;
+	case  4: op0100(opcode); break;
+	case  5: op0101(opcode); break;
+	case  6: op0110(opcode); break;
+	case  7: op0111(opcode); break;
+	case  8: op1000(opcode); break;
+	case  9: op1001(opcode); break;
+	case 10: op1010(opcode); break;
+	case 11: op1011(opcode); break;
+	case 12: op1100(opcode); break;
+	case 13: op1101(opcode); break;
+	case 14: op1110(opcode); break;
+	default: op1111(opcode); break;
+	}
+}
+
+static INLINE void sh2_step(void)
+{
+	UINT32 opcode;
+
+	if (sh2.delay)
+	{
+		opcode = sh2.opcode_read ? sh2.opcode_read(sh2.delay) : RW(sh2.delay & AM);
+		change_pc32bedw(sh2.pc & AM);
+		sh2.pc -= 2;
+	}
+	else
+		opcode = sh2.opcode_read ? sh2.opcode_read(sh2.pc) : RW(sh2.pc & AM);
+
+	CALL_MAME_DEBUG;
+
+	sh2.delay = 0;
+	sh2.pc += 2;
+	sh2.ppc = sh2.pc;
+
+	sh2_dispatch(opcode);
+
+	if(sh2.test_irq && !sh2.delay)
+	{
+		CHECK_PENDING_IRQ("mame_sh2_execute");
+		sh2.test_irq = 0;
+	}
+	sh2_icount--;
+}
+
+#include "sh2jit.c"
+
 /*****************************************************************************
  *	MAME CPU INTERFACE
  *****************************************************************************/
@@ -2324,6 +2397,10 @@ void sh2_reset(void *param)
 
 	sh2.cpu_number = cpu_getactivecpu();
 
+	/* code and memory handlers may differ after a reset */
+	if (jit_enabled)
+		jit_flush();
+
 	sh2.pc = RL(0);
 	sh2.r[15] = RL(4);
 	sh2.sr = I;
@@ -2335,10 +2412,12 @@ void sh2_reset(void *param)
 /* Shut down CPU core */
 void sh2_exit(void)
 {
+	sh2_jit_set(0);
 	if (sh2.m)
 		free(sh2.m);
 	sh2.m = NULL;
 }
+
 
 /* Execute cycles - returns number of cycles actually run */
 int sh2_execute(int cycles)
@@ -2350,49 +2429,10 @@ int sh2_execute(int cycles)
 
 	do
 	{
-		UINT32 opcode;
-
-		if (sh2.delay)
-		{
-			opcode = sh2.opcode_read ? sh2.opcode_read(sh2.delay) : RW(sh2.delay & AM);
-			change_pc32bedw(sh2.pc & AM);
-			sh2.pc -= 2;
-		}
-		else
-			opcode = sh2.opcode_read ? sh2.opcode_read(sh2.pc) : RW(sh2.pc & AM);
-
-		CALL_MAME_DEBUG;
-
-		sh2.delay = 0;
-		sh2.pc += 2;
-		sh2.ppc = sh2.pc;
-
-		switch ((opcode >> 12) & 15)
-		{
-		case  0: op0000(opcode); break;
-		case  1: op0001(opcode); break;
-		case  2: op0010(opcode); break;
-		case  3: op0011(opcode); break;
-		case  4: op0100(opcode); break;
-		case  5: op0101(opcode); break;
-		case  6: op0110(opcode); break;
-		case  7: op0111(opcode); break;
-		case  8: op1000(opcode); break;
-		case  9: op1001(opcode); break;
-		case 10: op1010(opcode); break;
-		case 11: op1011(opcode); break;
-		case 12: op1100(opcode); break;
-		case 13: op1101(opcode); break;
-		case 14: op1110(opcode); break;
-		default: op1111(opcode); break;
-		}
-
-		if(sh2.test_irq && !sh2.delay)
-		{
-			CHECK_PENDING_IRQ("mame_sh2_execute");
-			sh2.test_irq = 0;
-		}
-		sh2_icount--;
+		/* a block, when there is one for the PC (no slot or interrupt test pending) */
+		if (jit_enabled && !sh2.delay && !sh2.test_irq && sh2_jit_run())
+			continue;
+		sh2_step();
 	} while( sh2_icount > 0 );
 
 	return cycles - sh2_icount;
@@ -2597,6 +2637,7 @@ static void sh2_dmac_check(int dma)
 					if(incd == 2)
 						dst --;
 					cpu_writemem32bedw(dst, DMA_READ(src, dst, cpu_readmem32bedw(src), 0));
+					SH2JIT_STORE(dst, 1);
 					if(incs == 1)
 						src ++;
 					if(incd == 1)
@@ -2613,6 +2654,7 @@ static void sh2_dmac_check(int dma)
 					if(incd == 2)
 						dst -= 2;
 					cpu_writemem32bedw_word(dst, DMA_READ(src, dst, cpu_readmem32bedw_word(src), 1));
+					SH2JIT_STORE(dst, 2);
 					if(incs == 1)
 						src += 2;
 					if(incd == 1)
@@ -2629,6 +2671,7 @@ static void sh2_dmac_check(int dma)
 					if(incd == 2)
 						dst -= 4;
 					cpu_writemem32bedw_dword(dst, DMA_READ(src, dst, cpu_readmem32bedw_dword(src), 2));
+					SH2JIT_STORE(dst, 4);
 					if(incs == 1)
 						src += 4;
 					if(incd == 1)
@@ -2647,6 +2690,7 @@ static void sh2_dmac_check(int dma)
 					cpu_writemem32bedw_dword(dst+4, DMA_READ(src+4, dst+4, cpu_readmem32bedw_dword(src+4), 2));
 					cpu_writemem32bedw_dword(dst+8, DMA_READ(src+8, dst+8, cpu_readmem32bedw_dword(src+8), 2));
 					cpu_writemem32bedw_dword(dst+12, DMA_READ(src+12, dst+12, cpu_readmem32bedw_dword(src+12), 2));
+					SH2JIT_STORE(dst, 16);
 					src += 16;
 					if(incd == 1)
 						dst += 16;
