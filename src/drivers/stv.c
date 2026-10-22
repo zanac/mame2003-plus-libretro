@@ -3731,8 +3731,21 @@ MACHINE_INIT( stv )
 
 }
 
-struct sh2_config sh2_conf_master = { 0 };
-struct sh2_config sh2_conf_slave  = { 1 };
+/* both SH-2s run from the high work RAM: fetch the opcodes straight from it
+   instead of through the memory handlers (a fifth of the host time otherwise) */
+static data16_t stv_opcode_read(offs_t pc)
+{
+	pc &= 0x07ffffff;
+	if ((pc & 0x07f00000) == 0x06000000)
+	{
+		UINT32 data = stv_workram_h[(pc & 0xfffff) >> 2];
+		return (pc & 2) ? (data & 0xffff) : (data >> 16);
+	}
+	return cpu_readmem32bedw_word(pc);
+}
+
+struct sh2_config sh2_conf_master = { 0, stv_opcode_read };
+struct sh2_config sh2_conf_slave  = { 1, stv_opcode_read };
 
 static int scsp_last_line = 0;
 
