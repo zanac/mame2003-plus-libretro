@@ -2679,7 +2679,10 @@ static void stv_scu_dma_event(int event)
 
 /*
 SCU DMA, as in current MAME (saturn_scu.cpp), except that the data is moved at
-once; the level stays busy and its end interrupt comes after the time of the
+once. A direct transfer halts the SH-2s while it runs: the CPU that started
+it loses the time and the level is free at once, the end interrupt comes
+after the transfer time. An indirect one leaves the CPUs free:
+the level stays busy and its end interrupt comes after the time of the
 transfer (one word per clock, MAME's ticks).
 - a transfer to the work RAM H (C-bus) always writes consecutive words, whatever
   the add value (astrass, vmahjong, pblbeach)
@@ -2806,6 +2809,17 @@ static void scu_dma_trigger(int level)
 			r[0] = src;
 		if (r[5] & 0x100)	/* WUP */
 			r[1] = dst;
+
+		cpuintrf_pop_context();
+
+		/* a direct transfer halts the SH-2s until it is over (MAME's main_dtack):
+		   the CPU that started it loses the time, the level is free again for it,
+		   and the end interrupt comes after the transfer time (danchih sets a
+		   buffer right after the start and wants the interrupt after it) */
+		if (cpu_getactivecpu() >= 0 && cpu_getactivecpu() < 2)
+			activecpu_adjust_icount(-(int)(ticks / 2));
+		timer_adjust(scu_dma_timer[level], TIME_IN_HZ(57272720) * ticks, level, 0);
+		return;
 	}
 
 	cpuintrf_pop_context();
