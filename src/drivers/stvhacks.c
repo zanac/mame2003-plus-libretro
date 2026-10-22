@@ -27,7 +27,9 @@ master polls keeps the order of the real hardware.
 */
 static READ32_HANDLER( smleague_sync_r )
 {
-	cpu_boost_interleave(0, TIME_IN_USEC(20));
+	/* a slice of 16 SH-2 cycles is enough (a perfect one costs half the speed);
+	   with 64 cycles Super Major League and Final Arch hang again */
+	cpu_boost_interleave(TIME_IN_HZ(57272720/32), TIME_IN_USEC(20));
 	return stv_workram_h[0x0ffc44/4];
 }
 
