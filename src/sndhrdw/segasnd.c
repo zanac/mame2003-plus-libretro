@@ -5,12 +5,22 @@
 *************************************************************************/
 
 #include "driver.h"
+#include "state.h"
 #include "sega.h"
 #include "cpu/i8039/i8039.h"
 
 /* SP0250-based speechboard */
 
 static UINT8 sega_speechboard_latch, sega_speechboard_t0, sega_speechboard_p2, sega_speechboard_drq;
+
+/* save states: the latch and the lines of the speech board CPU */
+void sega_speechboard_save_init(void)
+{
+	state_save_register_UINT8("speechboard", 0, "latch", &sega_speechboard_latch, 1);
+	state_save_register_UINT8("speechboard", 0, "t0",    &sega_speechboard_t0, 1);
+	state_save_register_UINT8("speechboard", 0, "p2",    &sega_speechboard_p2, 1);
+	state_save_register_UINT8("speechboard", 0, "drq",   &sega_speechboard_drq, 1);
+}
 
 
 static READ_HANDLER( speechboard_t0_r )

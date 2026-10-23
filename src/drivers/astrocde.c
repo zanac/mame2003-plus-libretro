@@ -978,24 +978,30 @@ ROM_END
 
 
 
+void astrocde_machine_save_init(void);
+
 static DRIVER_INIT( seawolf2 )
 {
+	astrocde_machine_save_init();
 	install_port_read_handler(0, 0x10, 0x10, seawolf2_controller2_r);
 	install_port_read_handler(0, 0x11, 0x11, seawolf2_controller1_r);
 }
 static DRIVER_INIT( ebases )
 {
+	astrocde_machine_save_init();
 	install_port_read_handler (0, 0x13, 0x13, ebases_trackball_r);
 	install_port_write_handler(0, 0x28, 0x28, ebases_trackball_select_w);
 }
 static DRIVER_INIT( wow )
 {
+	astrocde_machine_save_init();
 	install_port_read_handler(0, 0x12, 0x12, wow_port_2_r);
 	install_port_read_handler(0, 0x15, 0x15, wow_io_r);
 	install_port_read_handler(0, 0x17, 0x17, wow_speech_r);
 }
 static DRIVER_INIT( gorf )
 {
+	astrocde_machine_save_init();
 	install_mem_read_handler (0, 0xd0a5, 0xd0a5, gorf_timer_r);
 
 	install_port_read_handler(0, 0x12, 0x12, gorf_port_2_r);

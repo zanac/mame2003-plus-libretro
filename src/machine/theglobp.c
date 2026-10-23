@@ -62,10 +62,12 @@
 ***************************************************************************/
 
 #include "driver.h"
+#include "state.h"
 
 void machine_init_pacman(void);
 
 static int counter=0;
+static int bank_offset = 0x18000;	/* the decrypted ROM in bank 1 */
 
 
 static void theglobp_decrypt_rom_8(void)
@@ -228,18 +230,25 @@ READ_HANDLER( theglobp_decrypt_rom )
 
 	switch(counter)
 	{
-		case 0x08:	cpu_setbank (1, &RAM[0x10000]);		break;
-		case 0x09:	cpu_setbank (1, &RAM[0x14000]);		break;
-		case 0x0A:	cpu_setbank (1, &RAM[0x18000]);		break;
-		case 0x0B:	cpu_setbank (1, &RAM[0x1C000]);		break;
+		case 0x08:	bank_offset = 0x10000;		break;
+		case 0x09:	bank_offset = 0x14000;		break;
+		case 0x0A:	bank_offset = 0x18000;		break;
+		case 0x0B:	bank_offset = 0x1C000;		break;
 		default:
 			log_cb(RETRO_LOG_DEBUG, LOGPRE "Invalid counter = %02X\n",counter);
 			break;
 	}
+	cpu_setbank (1, &RAM[bank_offset]);
 
 	return 0;
 }
 
+
+/* the counter and the bank are in the save states */
+static void theglobp_postload(void)
+{
+	cpu_setbank (1, &memory_region(REGION_CPU1)[bank_offset]);
+}
 
 MACHINE_INIT( theglobp )
 {
@@ -255,7 +264,13 @@ MACHINE_INIT( theglobp )
 
 	/* The initial state of the counter is 0x0A */
 	counter = 0x0A;
-	cpu_setbank (1, &RAM[0x18000]);
+	bank_offset = 0x18000;
+	cpu_setbank (1, &RAM[bank_offset]);
+
+	/* on a reset, the state system ignores the second registration */
+	state_save_register_int("theglobp", 0, "counter", &counter);
+	state_save_register_int("theglobp", 0, "bank", &bank_offset);
+	state_save_register_func_postload(theglobp_postload);
 
 	machine_init_pacman();
 }

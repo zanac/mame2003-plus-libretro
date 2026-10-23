@@ -81,6 +81,7 @@ driver modified by Eisuke Watanabe
 #include "vidhrdw/konamiic.h"
 #include "cpu/upd7810/upd7810.h"
 #include "machine/eeprom.h"
+#include "state.h"
 
 /* Variables defined in vidhrdw: */
 
@@ -392,10 +393,17 @@ static WRITE16_HANDLER( metro_soundstatus_w )
 }
 
 
+/* last sound ROM bank write and its handler, set again after loading a state */
+static int metro_sound_bank_data = -1;
+static write8_handler metro_sound_bank_w;
+
 static WRITE_HANDLER( metro_sound_rombank_w )
 {
 	int bankaddress;
 	data8_t *ROM = memory_region(REGION_CPU2);
+
+	metro_sound_bank_data = data;
+	metro_sound_bank_w = metro_sound_rombank_w;
 
 	bankaddress = 0x10000-0x4000 + ((data >> 4) & 0x03) * 0x4000;
 	if (bankaddress < 0x10000) bankaddress = 0x0000;
@@ -407,6 +415,9 @@ static WRITE_HANDLER( daitorid_sound_rombank_w )
 {
 	int bankaddress;
 	data8_t *ROM = memory_region(REGION_CPU2);
+
+	metro_sound_bank_data = data;
+	metro_sound_bank_w = daitorid_sound_rombank_w;
 
 	bankaddress = 0x10000-0x4000 + ((data >> 4) & 0x07) * 0x4000;
 	if (bankaddress < 0x10000) bankaddress = 0x10000;
@@ -1455,10 +1466,13 @@ MEMORY_END
 ***************************************************************************/
 
 static int gakusai_oki_bank_lo, gakusai_oki_bank_hi;
+static int gakusai_oki_bank_used;
 
 void gakusai_oki_bank_set(void)
 {
 	int bank = (gakusai_oki_bank_lo & 7) + (gakusai_oki_bank_hi & 1) * 8;
+
+	gakusai_oki_bank_used = 1;
 	OKIM6295_set_bank_base(0, bank * 0x40000);
 }
 
@@ -2007,6 +2021,9 @@ static WRITE_HANDLER( blzntrnd_sh_bankswitch_w )
 {
 	unsigned char *RAM = memory_region(REGION_CPU2);
 	int bankaddress;
+
+	metro_sound_bank_data = data;
+	metro_sound_bank_w = blzntrnd_sh_bankswitch_w;
 
 	bankaddress = 0x10000 + (data & 0x03) * 0x4000;
 	cpu_setbank(1, &RAM[bankaddress]);
@@ -4562,6 +4579,30 @@ MACHINE_DRIVER_END
 
 ***************************************************************************/
 
+static void metro_postload(void)
+{
+	if (metro_sound_bank_data != -1 && metro_sound_bank_w)
+		metro_sound_bank_w(0, metro_sound_bank_data);
+	if (gakusai_oki_bank_used)
+		gakusai_oki_bank_set();
+}
+
+/* save states: the IRQ causes, the sound CPU communication and the banks */
+static void metro_save_state(void)
+{
+	state_save_register_UINT8 ("metro", 0, "requested_int",   requested_int, 8);
+	state_save_register_UINT16("metro", 0, "soundstatus",     &metro_soundstatus, 1);
+	state_save_register_int   ("metro", 0, "porta",           &porta);
+	state_save_register_int   ("metro", 0, "portb",           &portb);
+	state_save_register_int   ("metro", 0, "busy_sndcpu",     &busy_sndcpu);
+	state_save_register_int   ("metro", 0, "okim6295_command", &okim6295_command);
+	state_save_register_int   ("metro", 0, "mouja_m6295_rombank", &mouja_m6295_rombank);
+	state_save_register_int   ("metro", 0, "gakusai_oki_bank_lo", &gakusai_oki_bank_lo);
+	state_save_register_int   ("metro", 0, "gakusai_oki_bank_hi", &gakusai_oki_bank_hi);
+	state_save_register_int   ("metro", 0, "sound_bank",      &metro_sound_bank_data);
+	state_save_register_func_postload(metro_postload);
+}
+
 static void metro_common(void)
 {
 	int i;
@@ -4593,6 +4634,8 @@ static void metro_common(void)
 	blitter_bit	=	2;
 
 	*metro_irq_enable = 0;
+
+	metro_save_state();
 }
 
 

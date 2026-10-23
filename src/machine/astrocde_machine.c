@@ -7,11 +7,13 @@
 **************************************************************************/
 
 #include "driver.h"
+#include "state.h"
 
+
+static int Skip=0;
 
 READ_HANDLER( gorf_timer_r )
 {
-	static int Skip=0;
 	unsigned char *RAM = memory_region(REGION_CPU1);
 
 
@@ -71,6 +73,13 @@ READ_HANDLER( seawolf2_controller2_r )
 
 
 static int ebases_trackball_select = 0;
+
+/* the states of the hacks and controls above, in the save states */
+void astrocde_machine_save_init(void)
+{
+	state_save_register_int("astrocde", 0, "gorf_timer_skip", &Skip);
+	state_save_register_int("astrocde", 0, "ebases_trackball_select", &ebases_trackball_select);
+}
 
 WRITE_HANDLER( ebases_trackball_select_w )
 {

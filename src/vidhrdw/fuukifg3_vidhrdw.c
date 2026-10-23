@@ -28,6 +28,7 @@
 ***************************************************************************/
 
 #include "vidhrdw/generic.h"
+#include "state.h"
 
 /* Variables that driver has access to: */
 
@@ -113,6 +114,11 @@ VIDEO_START( fuuki32 )
 {
 	buffered_spriteram32   = auto_malloc(spriteram_size);
 	buffered_spriteram32_2 = auto_malloc(spriteram_size);
+
+	/* save states: the sprites are buffered by two frames */
+	state_save_register_UINT32("fuuki32", 0, "buffered spriteram",   buffered_spriteram32,   spriteram_size / 4);
+	state_save_register_UINT32("fuuki32", 0, "buffered spriteram 2", buffered_spriteram32_2, spriteram_size / 4);
+	state_save_register_UINT32("fuuki32", 0, "buffered tilebank",    spr_buffered_tilebank,  2);
 
 	tilemap_0 = tilemap_create(	get_tile_info_0, tilemap_scan_rows,
 								TILEMAP_TRANSPARENT, 16, 16, 64,32);

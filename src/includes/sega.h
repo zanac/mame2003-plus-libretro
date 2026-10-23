@@ -8,6 +8,7 @@
 
 extern UINT8 *sega_mem;
 extern void sega_security(int chip);
+void sega_machine_save_init(void);
 
 WRITE_HANDLER( sega_w );
 

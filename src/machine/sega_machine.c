@@ -12,6 +12,7 @@
  */
 
 #include "driver.h"
+#include "state.h"
 #include "sega.h"
 #include "segar.h"
 
@@ -20,6 +21,17 @@ UINT8 *sega_mem;
 static UINT8 mult1;
 static UINT16 result;
 static UINT8 ioSwitch; /* determines whether we're reading the spinner or the buttons */
+static int spinner_sign, spinner;	/* the spinner of sega_IN4_r */
+
+/* save states: the multiplier and the input switch */
+void sega_machine_save_init(void)
+{
+	state_save_register_UINT8 ("sega", 0, "mult1",    &mult1, 1);
+	state_save_register_UINT16("sega", 0, "result",   &result, 1);
+	state_save_register_UINT8 ("sega", 0, "ioSwitch", &ioSwitch, 1);
+	state_save_register_int   ("sega", 0, "spinner_sign", &spinner_sign);
+	state_save_register_int   ("sega", 0, "spinner", &spinner);
+}
 
 WRITE_HANDLER( sega_w )
 {
@@ -149,8 +161,6 @@ READ_HANDLER( sega_IN4_r ) {
  */
 
 	int delta;
-	static int sign;
-	static int spinner;
 
 	if (ioSwitch & 1) /* ioSwitch = 0x01 or 0xff */
 		return readinputport (4);
@@ -161,12 +171,12 @@ READ_HANDLER( sega_IN4_r ) {
 	delta = readinputport(8);
 	if (delta != 0)
 	{
-		sign = delta >> 7;
-		if (sign)
+		spinner_sign = delta >> 7;
+		if (spinner_sign)
 			delta = 0x80-delta;
 		spinner += delta;
 	}
-	return (~((spinner<<1) | sign));
+	return (~((spinner<<1) | spinner_sign));
 }
 
 READ_HANDLER( elim4_IN4_r )

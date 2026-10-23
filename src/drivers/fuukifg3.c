@@ -87,6 +87,7 @@ FG-3J ROM-J 507KA0301P04       Rev:1.3
 
 #include "driver.h"
 #include "vidhrdw/generic.h"
+#include "state.h"
 
 static int fuuki32_raster_enable = 1; /* Enabled by default */
 static data8_t fuuki32_shared_ram[16];
@@ -263,11 +264,28 @@ MEMORY_END
 
 ***************************************************************************/
 
+static int fuuki32_sound_bank;
+
 static WRITE_HANDLER ( fuuki32_sound_bw_w )
 {
 	data8_t *rom = memory_region(REGION_CPU2);
 
+	fuuki32_sound_bank = data;
 	cpu_setbank(1, rom + 0x10000 + (data * 0x8000));
+}
+
+static void fuuki32_postload(void)
+{
+	cpu_setbank(1, memory_region(REGION_CPU2) + 0x10000 + (fuuki32_sound_bank * 0x8000));
+}
+
+/* save states: the RAM shared with the sound CPU and the sound ROM bank. On
+   a reset, the state system ignores the second registration. */
+static MACHINE_INIT( fuuki32 )
+{
+	state_save_register_UINT8("fuuki32", 0, "shared_ram", fuuki32_shared_ram, 16);
+	state_save_register_int  ("fuuki32", 0, "sound_bank", &fuuki32_sound_bank);
+	state_save_register_func_postload(fuuki32_postload);
 }
 
 static READ_HANDLER( snd_z80_r )
@@ -589,6 +607,7 @@ static MACHINE_DRIVER_START( fuuki32 )
 
 	MDRV_FRAMES_PER_SECOND(60)
 	MDRV_VBLANK_DURATION(DEFAULT_60HZ_VBLANK_DURATION)
+	MDRV_MACHINE_INIT(fuuki32)
 
 	/* video hardware */
 	MDRV_VIDEO_ATTRIBUTES(VIDEO_TYPE_RASTER) /* | VIDEO_BUFFERS_SPRITERAM ) */ /* Buffered by 2 frames*/

@@ -1147,6 +1147,8 @@ DRIVER_INIT( spacfury )
 {
 	/* This game uses the 315-0064 security chip */
 	sega_security(64);
+	sega_machine_save_init();
+	sega_speechboard_save_init();
 
 	install_port_read_handler(0, 0xfc, 0xfc, input_port_8_r);
 
@@ -1161,6 +1163,8 @@ DRIVER_INIT( zektor )
 {
 	/* This game uses the 315-0082 security chip */
 	sega_security(82);
+	sega_machine_save_init();
+	sega_speechboard_save_init();
 
 	install_port_read_handler(0, 0xfc, 0xfc, sega_IN4_r);
 
@@ -1174,6 +1178,8 @@ DRIVER_INIT( elim2 )
 {
 	/* This game uses the 315-0070 security chip */
 	sega_security(70);
+	sega_machine_save_init();
+	sega_speechboard_save_init();
 
 	install_port_read_handler(0, 0xfc, 0xfc, input_port_4_r);
 
@@ -1186,6 +1192,8 @@ DRIVER_INIT( elim4 )
 {
 	/* This game uses the 315-0076 security chip */
 	sega_security(76);
+	sega_machine_save_init();
+	sega_speechboard_save_init();
 
 	install_port_read_handler(0, 0xfc, 0xfc, elim4_IN4_r);
 
@@ -1198,6 +1206,8 @@ DRIVER_INIT( startrek )
 {
 	/* This game uses the 315-0064 security chip */
 	sega_security(64);
+	sega_machine_save_init();
+	sega_speechboard_save_init();
 
 	install_port_read_handler(0, 0xfc, 0xfc, sega_IN4_r);
 
@@ -1210,6 +1220,8 @@ DRIVER_INIT( tacscan )
 {
 	/* This game uses the 315-0076 security chip */
 	sega_security(76);
+	sega_machine_save_init();
+	sega_speechboard_save_init();
 
 	install_port_read_handler(0, 0xfc, 0xfc, sega_IN4_r);
 

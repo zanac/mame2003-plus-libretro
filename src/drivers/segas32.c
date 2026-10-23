@@ -354,6 +354,7 @@ Stephh's notes (based on some tests) :
 #include "machine/eeprom.h"
 #include "machine/random.h"
 #include "includes/segas32.h"
+#include "state.h"
 
 
 /*************************************
@@ -1150,6 +1151,8 @@ static PORT_WRITE_START( multi32_sound_portmap_w )
 PORT_END
 
 
+static void segas32_save_state(void);
+
 static MACHINE_INIT( segas32 )
 {
 	cpu_setbank(1, memory_region(REGION_CPU1));
@@ -1164,6 +1167,8 @@ static MACHINE_INIT( segas32 )
 
 	/* clear IRQ lines */
 	cpu_set_irq_line(0, 0, CLEAR_LINE);
+
+	segas32_save_state();
 }
 
 /* Analog Input Handlers */
@@ -1248,6 +1253,33 @@ static data16_t sys32_gun_p1_x_c00050_data;
 static data16_t sys32_gun_p1_y_c00052_data;
 static data16_t sys32_gun_p2_x_c00054_data;
 static data16_t sys32_gun_p2_y_c00056_data;
+
+static void segas32_postload(void)
+{
+	if (sound_bankptr)
+		sound_bankptr = &memory_region(REGION_CPU2)[0x2000*sound_bank];
+}
+
+/* save states: the interrupt controllers, the sound bank, the I/O chips
+   and the analog and gun inputs. On a reset, the state system ignores the
+   second registration. */
+static void segas32_save_state(void)
+{
+	state_save_register_UINT8 ("segas32", 0, "v60_irq_control",   v60_irq_control, 0x10);
+	state_save_register_UINT8 ("segas32", 0, "sound_irq_control", sound_irq_control, 4);
+	state_save_register_UINT8 ("segas32", 0, "sound_irq_input",   &sound_irq_input, 1);
+	state_save_register_UINT8 ("segas32", 0, "sound_dummy_value", &sound_dummy_value, 1);
+	state_save_register_UINT16("segas32", 0, "sound_bank",        &sound_bank, 1);
+	state_save_register_UINT8 ("segas32", 0, "misc_io_data",      &misc_io_data[0][0], 2*0x10);
+	state_save_register_INT32 ("segas32", 0, "analogRead",        analogRead, 8);
+	state_save_register_int   ("segas32", 0, "analogSwitch",      &analogSwitch);
+	state_save_register_UINT8 ("segas32", 0, "last",              last, 6);
+	state_save_register_UINT16("segas32", 0, "gun_p1_x",          &sys32_gun_p1_x_c00050_data, 1);
+	state_save_register_UINT16("segas32", 0, "gun_p1_y",          &sys32_gun_p1_y_c00052_data, 1);
+	state_save_register_UINT16("segas32", 0, "gun_p2_x",          &sys32_gun_p2_x_c00054_data, 1);
+	state_save_register_UINT16("segas32", 0, "gun_p2_y",          &sys32_gun_p2_y_c00056_data, 1);
+	state_save_register_func_postload(segas32_postload);
+}
 
 static WRITE16_HANDLER ( sys32_gun_p1_x_c00050_w ) { sys32_gun_p1_x_c00050_data = readinputport(7); }
 static WRITE16_HANDLER ( sys32_gun_p1_y_c00052_w ) { sys32_gun_p1_y_c00052_data = readinputport(8); }

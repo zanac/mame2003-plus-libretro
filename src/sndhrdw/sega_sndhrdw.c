@@ -5,6 +5,7 @@
 *************************************************************************/
 
 #include "driver.h"
+#include "state.h"
 #include "sega.h"
 
 /* History:
@@ -180,6 +181,7 @@ static int roarPlaying;	/* Is the ship roar noise playing? */
 int tacscan_sh_start (const struct MachineSound *msound)
 {
 	roarPlaying = 0;
+	state_save_register_int("tacscan", 0, "roarPlaying", &roarPlaying);
 	return 0;
 }
 

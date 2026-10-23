@@ -7,6 +7,7 @@
 ***************************************************************************/
 
 #include "driver.h"
+#include "state.h"
 #include "artwork.h"
 #include "cpu/z80/z80.h"
 
@@ -278,9 +279,10 @@ WRITE_HANDLER( astrocde_colour_register_w )
 #endif
 }
 
+static int color_reg_num = 7;
+
 WRITE_HANDLER( astrocde_colour_block_w )
 {
-	static int color_reg_num = 7;
 
 	astrocde_colour_register_w(color_reg_num,data);
 
@@ -410,44 +412,45 @@ WRITE_HANDLER( wow_magicram_w )
 }
 
 
-WRITE_HANDLER( astrocde_pattern_board_w )
-{
-	static int src;
-	static int mode;	/*  bit 0 = direction
+static int pattern_src;
+static int pattern_mode;	/*  bit 0 = direction
 							bit 1 = expand mode
 							bit 2 = constant
 							bit 3 = flush
 							bit 4 = flip
 							bit 5 = flop */
-	static int skip;	/* bytes to skip after row copy */
-	static int dest;
-	static int length;	/* row length */
-	static int loops;	/* rows to copy - 1 */
+static int pattern_skip;	/* bytes to skip after row copy */
+static int pattern_dest;
+static int pattern_length;	/* row length */
+static int pattern_loops;	/* rows to copy - 1 */
+
+WRITE_HANDLER( astrocde_pattern_board_w )
+{
 	unsigned char *RAM = memory_region(REGION_CPU1);
 
 
 	switch (offset)
 	{
 		case 0:
-			src = data;
+			pattern_src = data;
 			break;
 		case 1:
-			src = src + data * 256;
+			pattern_src = pattern_src + data * 256;
 			break;
 		case 2:
-			mode = data & 0x3f;			/* register is 6 bit wide */
+			pattern_mode = data & 0x3f;			/* register is 6 bit wide */
 			break;
 		case 3:
-			skip = data;
+			pattern_skip = data;
 			break;
 		case 4:
-			dest = skip + data * 256;	/* register 3 is shared between skip and dest */
+			pattern_dest = pattern_skip + data * 256;	/* register 3 is shared between skip and dest */
 			break;
 		case 5:
-			length = data;
+			pattern_length = data;
 			break;
 		case 6:
-			loops = data;
+			pattern_loops = data;
 			break;
 	}
 
@@ -456,58 +459,58 @@ WRITE_HANDLER( astrocde_pattern_board_w )
 		int i,j;
 
 #ifdef MAME_DEBUG
-/*		logerror("%04x: blit src %04x mode %02x skip %d dest %04x length %d loops %d\n",*/
-/*			activecpu_get_pc(),src,mode,skip,dest,length,loops);*/
+/*		logerror("%04x: blit pattern_src %04x pattern_mode %02x pattern_skip %d pattern_dest %04x pattern_length %d pattern_loops %d\n",*/
+/*			activecpu_get_pc(),pattern_src,pattern_mode,pattern_skip,pattern_dest,pattern_length,pattern_loops);*/
 #endif
 
 		/* Kludge: have to steal some cycles from the Z80 otherwise text
 		   scrolling in Gorf is too fast. */
-		z80_ICount -= 4 * (length+1) * (loops+1);
+		z80_ICount -= 4 * (pattern_length+1) * (pattern_loops+1);
 
-		for (i = 0; i <= loops;i++)
+		for (i = 0; i <= pattern_loops;i++)
 		{
-			for (j = 0;j <= length;j++)
+			for (j = 0;j <= pattern_length;j++)
 			{
-				if (!(mode & 0x08) || j < length)
+				if (!(pattern_mode & 0x08) || j < pattern_length)
 				{
-					if (mode & 0x01)			/* Direction */
-						RAM[src]=RAM[dest];
+					if (pattern_mode & 0x01)			/* Direction */
+						RAM[pattern_src]=RAM[pattern_dest];
 					else
-						if (dest >= 0) cpu_writemem16(dest,RAM[src]);	/* ASG 971005 */
+						if (pattern_dest >= 0) cpu_writemem16(pattern_dest,RAM[pattern_src]);	/* ASG 971005 */
 				}
 				/* close out writes in case of shift... I think this is wrong */
-				else if (j == length)
-					if (dest >= 0) cpu_writemem16(dest,0);
+				else if (j == pattern_length)
+					if (pattern_dest >= 0) cpu_writemem16(pattern_dest,0);
 
-				if ((j & 1) || !(mode & 0x02))  /* Expand Mode - don't increment source on odd loops */
-					if (mode & 0x04) src++;		/* Constant mode - don't increment at all! */
+				if ((j & 1) || !(pattern_mode & 0x02))  /* Expand Mode - don't increment source on odd pattern_loops */
+					if (pattern_mode & 0x04) pattern_src++;		/* Constant pattern_mode - don't increment at all! */
 
-				if (mode & 0x20) dest++;		/* copy forwards */
-				else dest--;					/* backwards */
+				if (pattern_mode & 0x20) pattern_dest++;		/* copy forwards */
+				else pattern_dest--;					/* backwards */
 			}
 
-			if ((j & 1) && (mode & 0x02))		/* always increment source at end of line */
-				if (mode & 0x04) src++;			/* Constant mode - don't increment at all! */
+			if ((j & 1) && (pattern_mode & 0x02))		/* always increment source at end of line */
+				if (pattern_mode & 0x04) pattern_src++;			/* Constant pattern_mode - don't increment at all! */
 
-			if ((mode & 0x08) && (mode & 0x04)) /* Correct src if in flush mode */
-				src--;                          /* and NOT in Constant mode */
+			if ((pattern_mode & 0x08) && (pattern_mode & 0x04)) /* Correct pattern_src if in flush pattern_mode */
+				pattern_src--;                          /* and NOT in Constant pattern_mode */
 
-			if (mode & 0x20) dest--;			/* copy forwards */
-			else dest++;						/* backwards */
+			if (pattern_mode & 0x20) pattern_dest--;			/* copy forwards */
+			else pattern_dest++;						/* backwards */
 
-			dest += (int)((signed char)skip);	/* extend the sign of the skip register */
+			pattern_dest += (int)((signed char)pattern_skip);	/* extend the sign of the pattern_skip register */
 
-			/* Note: actually the hardware doesn't handle the sign of the skip register, */
+			/* Note: actually the hardware doesn't handle the sign of the pattern_skip register, */
 			/* when incrementing the destination address the carry bit is taken from the */
-			/* mode register. To faithfully emulate the hardware I should do: */
+			/* pattern_mode register. To faithfully emulate the hardware I should do: */
 #if 0
 			{
 				int lo,hi;
 
-				lo = dest & 0x00ff;
-				hi = dest & 0xff00;
-				lo += skip;
-				if (mode & 0x10)
+				lo = pattern_dest & 0x00ff;
+				hi = pattern_dest & 0xff00;
+				lo += pattern_skip;
+				if (pattern_mode & 0x10)
 				{
 					if (lo < 0x100) hi -= 0x100;
 				}
@@ -515,7 +518,7 @@ WRITE_HANDLER( astrocde_pattern_board_w )
 				{
 					if (lo > 0xff) hi += 0x100;
 				}
-				dest = hi | (lo & 0xff);
+				pattern_dest = hi | (lo & 0xff);
 			}
 #endif
 		}
@@ -701,6 +704,31 @@ VIDEO_START( astrocde )
 
 	memset(sparkle,0,sizeof(sparkle));
 	CurrentScan = 0;
+
+	/* the video chip state, so that a loaded state runs the same frames again */
+	state_save_register_UINT8("astrocde", 0, "interrupt_enable", &interrupt_enable, 1);
+	state_save_register_UINT8("astrocde", 0, "interrupt_vector", &interrupt_vector, 1);
+	state_save_register_int  ("astrocde", 0, "magic_expand_color", &magic_expand_color);
+	state_save_register_int  ("astrocde", 0, "magic_control", &magic_control);
+	state_save_register_int  ("astrocde", 0, "magic_expand_count", &magic_expand_count);
+	state_save_register_int  ("astrocde", 0, "magic_shift_leftover", &magic_shift_leftover);
+	state_save_register_int  ("astrocde", 0, "collision", &collision);
+	state_save_register_INT32("astrocde", 0, "colors", (INT32 *)&colors[0][0], MAX_INT_PER_FRAME * 8);
+	state_save_register_INT32("astrocde", 0, "colorsplit", (INT32 *)colorsplit, MAX_INT_PER_FRAME);
+	state_save_register_int  ("astrocde", 0, "BackgroundData", &BackgroundData);
+	state_save_register_int  ("astrocde", 0, "VerticalBlank", &VerticalBlank);
+	state_save_register_INT32("astrocde", 0, "sparkle", (INT32 *)&sparkle[0][0], MAX_INT_PER_FRAME * 4);
+	state_save_register_int  ("astrocde", 0, "NextScanInt", &NextScanInt);
+	state_save_register_int  ("astrocde", 0, "CurrentScan", &CurrentScan);
+	state_save_register_int  ("astrocde", 0, "InterruptFlag", &InterruptFlag);
+	state_save_register_int  ("astrocde", 0, "GorfDelay", &GorfDelay);
+	state_save_register_int  ("astrocde", 0, "color_reg_num", &color_reg_num);
+	state_save_register_int  ("astrocde", 0, "pattern_src", &pattern_src);
+	state_save_register_int  ("astrocde", 0, "pattern_mode", &pattern_mode);
+	state_save_register_int  ("astrocde", 0, "pattern_skip", &pattern_skip);
+	state_save_register_int  ("astrocde", 0, "pattern_dest", &pattern_dest);
+	state_save_register_int  ("astrocde", 0, "pattern_length", &pattern_length);
+	state_save_register_int  ("astrocde", 0, "pattern_loops", &pattern_loops);
 
 	return 0;
 }
