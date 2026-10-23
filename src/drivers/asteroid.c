@@ -602,9 +602,12 @@ INPUT_PORTS_START( llander )
 	PORT_DIPSETTING (	0x90, "1550" )
 	PORT_DIPSETTING (	0xd0, "1800" )
 
-	/* The next one is a potentiometer */
+	/* The next one is a potentiometer, the thrust control. As in current */
+	/* MAME: the DAC/counter circuit always tries to self center at the */
+	/* voltage derived from the thrust control and never expects to reach */
+	/* 0xff, so the range stops at 0xfe */
 	PORT_START /* IN3 */
-	PORT_ANALOGX( 0xff, 0x00, IPT_PADDLE|IPF_REVERSE, 100, 10, 0, 255, KEYCODE_UP, KEYCODE_DOWN, JOYCODE_1_UP, JOYCODE_1_DOWN )
+	PORT_ANALOGX( 0xff, 0x00, IPT_PADDLE|IPF_REVERSE, 100, 10, 0, 254, KEYCODE_UP, KEYCODE_DOWN, JOYCODE_1_UP, JOYCODE_1_DOWN )
 INPUT_PORTS_END
 
 
@@ -648,9 +651,12 @@ INPUT_PORTS_START( llander1 )
 	PORT_DIPSETTING (	0x80, "750" )
 	PORT_DIPSETTING (	0xc0, "900" )
 
-	/* The next one is a potentiometer */
+	/* The next one is a potentiometer, the thrust control. As in current */
+	/* MAME: the DAC/counter circuit always tries to self center at the */
+	/* voltage derived from the thrust control and never expects to reach */
+	/* 0xff, so the range stops at 0xfe */
 	PORT_START /* IN3 */
-	PORT_ANALOGX( 0xff, 0x00, IPT_PADDLE|IPF_REVERSE, 100, 10, 0, 255, KEYCODE_UP, KEYCODE_DOWN, JOYCODE_1_UP, JOYCODE_1_DOWN )
+	PORT_ANALOGX( 0xff, 0x00, IPT_PADDLE|IPF_REVERSE, 100, 10, 0, 254, KEYCODE_UP, KEYCODE_DOWN, JOYCODE_1_UP, JOYCODE_1_DOWN )
 INPUT_PORTS_END
 
 
