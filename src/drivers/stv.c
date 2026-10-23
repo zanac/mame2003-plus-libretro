@@ -1831,6 +1831,80 @@ static void system_reset()
 	/*Order is surely wrong but whatever...*/
 }
 
+/* INTBACK as in MAME's SMPC HLE: SR, the peripheral stages with the
+   CONTINUE / BREAK requests in IREG0, and the command timing. ST-V has no
+   pads on the SMPC ports, so no peripheral data is returned, but the SGL
+   handlers of some games (findlove) wait for the stages to end */
+static UINT8 smpc_sr;
+static UINT8 smpc_intback_stage;
+static UINT8 smpc_intback_buf[3];
+static UINT8 smpc_pmode;
+static void *smpc_intback_timer;
+
+static void smpc_intback_continue(int param)
+{
+	if (smpc_intback_stage == 2)
+	{
+		smpc_sr = 0x80 | smpc_pmode;	/* pad 2, no more data */
+		smpc_intback_stage = 0;
+	}
+	else
+	{
+		smpc_sr = 0xc0 | smpc_pmode;	/* pad 1, more data */
+		smpc_intback_stage++;
+	}
+	stv_scu_raise_irq(7);	/* SMPC */
+	smpc_ram[0x5f] = 0x10;
+	smpc_ram[0x63] = 0x00;
+}
+
+static void smpc_intback_resolve(int param)
+{
+	time_t ltime;
+	struct tm *today;
+	time(&ltime);
+	today = localtime(&ltime);
+
+	if (smpc_intback_buf[0] != 0)
+	{
+		smpc_ram[0x21]=0x80;
+		smpc_ram[0x23] = DectoBCD((today->tm_year + 1900)/100);
+		smpc_ram[0x25] = DectoBCD((today->tm_year + 1900)%100);
+		smpc_ram[0x27] = (today->tm_wday << 4) | (today->tm_mon+1);
+		smpc_ram[0x29] = DectoBCD(today->tm_mday);
+		smpc_ram[0x2b] = DectoBCD(today->tm_hour);
+		smpc_ram[0x2d] = DectoBCD(today->tm_min);
+		smpc_ram[0x2f] = DectoBCD(today->tm_sec);
+		smpc_ram[0x31]=0x00;
+		smpc_ram[0x35]=0x00;
+		smpc_ram[0x37]=0x00;
+		{
+			int i;
+			for (i = 0x39; i <= 0x5d; i += 2)
+				smpc_ram[i] = 0xff;
+		}
+
+		smpc_intback_stage = (smpc_intback_buf[1] & 8) >> 3;	/* first peripheral */
+		smpc_sr = 0x40 | (smpc_intback_stage << 5);
+		smpc_pmode = smpc_intback_buf[0] >> 4;
+		stv_scu_raise_irq(7);	/* SMPC */
+		smpc_ram[0x5f] = 0x10;
+		smpc_ram[0x63] = 0x00;
+	}
+	else if (smpc_intback_buf[1] & 8)
+	{
+		smpc_intback_stage = 1;
+		smpc_sr = 0x40;
+		smpc_ram[0x5f] = 0x10;
+		smpc_intback_continue(0);
+	}
+	else
+	{
+		smpc_ram[0x5f] = 0x10;
+		smpc_ram[0x63] = 0x00;
+	}
+}
+
 static UINT8 stv_SMPC_r8 (int offset)
 {
 	int return_data;
@@ -1838,8 +1912,8 @@ static UINT8 stv_SMPC_r8 (int offset)
 
 	return_data = smpc_ram[offset];
 
-	if ((offset == 0x61)) /* ?? many games need this or the controls don't work*/
-		return_data = 0x20 ^ 0xff;
+	if (offset == 0x61)	/* SR */
+		return_data = smpc_sr;
 
 	if (offset == 0x75)/*PDR1 read*/
 		return_data = readinputport(0);
@@ -1860,13 +1934,24 @@ static UINT8 stv_SMPC_r8 (int offset)
 
 static void stv_SMPC_w8 (int offset, UINT8 data)
 {
-	time_t ltime;
-	struct tm *today;
-	time(&ltime);
-	today = localtime(&ltime);
-
 /*	logerror ("8-bit SMPC Write to Offset %02x with Data %02x\n", offset, data);*/
 	smpc_ram[offset] = data;
+
+	/* IREG0 while under INTBACK: BREAK or CONTINUE */
+	if (offset == 0x01 && smpc_intback_stage)
+	{
+		if (data & 0x40)
+		{
+			smpc_sr &= 0x0f;
+			smpc_intback_stage = 0;
+		}
+		else if (data & 0x80)
+		{
+			timer_adjust(smpc_intback_timer, TIME_IN_USEC(700), 0, 0);
+			smpc_ram[0x5f] = 0x10;
+			smpc_ram[0x63] = 0x01;
+		}
+	}
 
 	if(offset == 0x75)
 	{
@@ -1982,47 +2067,20 @@ static void stv_SMPC_w8 (int offset, UINT8 data)
 				break;
 			/*"Interrupt Back"*/
 			case 0x10:
+			{
+				int timing = 8;
 				logerror ("SMPC: Status Acquire\n");
-				smpc_ram[0x5f]=0x10;
-				smpc_ram[0x21]=0x80;
-			  	smpc_ram[0x23] = DectoBCD((today->tm_year + 1900)/100);
-		    	smpc_ram[0x25] = DectoBCD((today->tm_year + 1900)%100);
-	    		smpc_ram[0x27] = (today->tm_wday << 4) | (today->tm_mon+1);
-		    	smpc_ram[0x29] = DectoBCD(today->tm_mday);
-		    	smpc_ram[0x2b] = DectoBCD(today->tm_hour);
-		    	smpc_ram[0x2d] = DectoBCD(today->tm_min);
-		    	smpc_ram[0x2f] = DectoBCD(today->tm_sec);
-
-				smpc_ram[0x31]=0x00;  /*BHOOOOO*/
-
-				/*smpc_ram[0x33]=readinputport(7);*/
-
-				smpc_ram[0x35]=0x00;
-				smpc_ram[0x37]=0x00;
-
-				smpc_ram[0x39]=0xff;
-				smpc_ram[0x3b]=0xff;
-				smpc_ram[0x3d]=0xff;
-				smpc_ram[0x3f]=0xff;
-				smpc_ram[0x41]=0xff;
-				smpc_ram[0x43]=0xff;
-				smpc_ram[0x45]=0xff;
-				smpc_ram[0x47]=0xff;
-				smpc_ram[0x49]=0xff;
-				smpc_ram[0x4b]=0xff;
-				smpc_ram[0x4d]=0xff;
-				smpc_ram[0x4f]=0xff;
-				smpc_ram[0x51]=0xff;
-				smpc_ram[0x53]=0xff;
-				smpc_ram[0x55]=0xff;
-				smpc_ram[0x57]=0xff;
-				smpc_ram[0x59]=0xff;
-				smpc_ram[0x5b]=0xff;
-				smpc_ram[0x5d]=0xff;
-
-			/*	 //This is for RTC,cartridge code and similar stuff.../*/
-				stv_scu_raise_irq(7);	/* SMPC */
-			break;
+				smpc_intback_buf[0] = smpc_ram[0x01];
+				smpc_intback_buf[1] = smpc_ram[0x03];
+				smpc_intback_buf[2] = smpc_ram[0x05];
+				if (smpc_intback_buf[0] != 0)	/* non-peripheral data */
+					timing += 8;
+				if (smpc_intback_buf[1] & 8)	/* peripheral data */
+					timing += 700;
+				timer_set(TIME_IN_USEC(timing), 0, smpc_intback_resolve);
+				/* the command ends in smpc_intback_resolve */
+				return;
+			}
 			/* RTC write*/
 			case 0x16:
 				log_cb(RETRO_LOG_DEBUG, LOGPRE "SMPC: RTC write\n");
@@ -3749,6 +3807,10 @@ MACHINE_INIT( stv )
 	cpu_set_irq_callback(0, stv_master_irq_callback);
 	en_68k = 0;
 	smpc_ram[0x21] = 0x80;
+	if (!smpc_intback_timer)
+		smpc_intback_timer = timer_alloc(smpc_intback_continue);
+	timer_adjust(smpc_intback_timer, TIME_NEVER, 0, 0);
+	smpc_sr = smpc_intback_stage = smpc_pmode = 0;
 
 	/* time of tight interleave after MINIT / SINIT (MAME's DCC) */
 	minit_boost = 1666;
