@@ -82,8 +82,10 @@ double sec_to_cycles[MAX_CPU];
 /* list of active timers */
 static mame_timer timers[MAX_TIMERS];
 static mame_timer *timer_head;
-static mame_timer *timer_free_head;
-static mame_timer *timer_free_tail;
+/* free entries have tag -1; a new timer takes the free entry with the lowest
+   index, so that the timers allocated again after a reset (in the same
+   order) get the same entries, and the pointers that drivers keep stay
+   valid with a save state from before the reset */
 
 /* other internal states */
 static double global_offset;
@@ -125,15 +127,15 @@ static INLINE mame_timer *timer_new(void)
 {
 	mame_timer *timer;
 
-	/* remove an empty entry */
-	if (!timer_free_head)
-		return NULL;
-	timer = timer_free_head;
-	timer_free_head = timer->next;
-	if (!timer_free_head)
-		timer_free_tail = NULL;
+	/* take the free entry with the lowest index */
+	for (timer = timers; timer < &timers[MAX_TIMERS]; timer++)
+		if (timer->tag == -1)
+		{
+			timer->next = timer->prev = NULL;
+			return timer;
+		}
 
-	return timer;
+	return NULL;
 }
 
 
@@ -246,14 +248,8 @@ void timer_init(void)
 
 	/* initialize the lists */
 	timer_head = NULL;
-	timer_free_head = &timers[0];
-	for (i = 0; i < MAX_TIMERS-1; i++)
-	{
+	for (i = 0; i < MAX_TIMERS; i++)
 		timers[i].tag = -1;
-		timers[i].next = &timers[i+1];
-	}
-	timers[MAX_TIMERS-1].next = NULL;
-	timer_free_tail = &timers[MAX_TIMERS-1];
 }
 
 
@@ -506,13 +502,7 @@ void timer_remove(mame_timer *which)
 	/* mark it as dead */
 	which->tag = -1;
 
-	/* free it up by adding it back to the free list */
-	if (timer_free_tail)
-		timer_free_tail->next = which;
-	else
-		timer_free_head = which;
-	which->next = NULL;
-	timer_free_tail = which;
+	which->next = which->prev = NULL;
 }
 
 
@@ -632,7 +622,7 @@ static INT32 ss_flags[MAX_TIMERS];
 static double ss_period[MAX_TIMERS];
 static double ss_start[MAX_TIMERS];
 static double ss_expire[MAX_TIMERS];
-static INT32 ss_heads[3];
+static INT32 ss_heads[1];
 static double ss_global_offset;
 #define SS_FINGERPRINT 8
 static INT32 ss_fingerprint[SS_FINGERPRINT];
@@ -702,8 +692,6 @@ static void timer_presave(void)
 		ss_expire[i] = timer->expire;
 	}
 	ss_heads[0] = timer_to_index(timer_head);
-	ss_heads[1] = timer_to_index(timer_free_head);
-	ss_heads[2] = timer_to_index(timer_free_tail);
 	ss_global_offset = global_offset;
 	timer_fingerprint(ss_fingerprint);
 }
@@ -711,6 +699,8 @@ static void timer_presave(void)
 static void timer_postload(void)
 {
 	UINT8 live_permanent[MAX_TIMERS];
+	int live_tag[MAX_TIMERS];
+	void (*live_callback[MAX_TIMERS])(int);
 	UINT8 saved_active[MAX_TIMERS];
 	INT32 fingerprint[SS_FINGERPRINT];
 	mame_timer *timer;
@@ -728,7 +718,11 @@ static void timer_postload(void)
 	memset(live_permanent, 0, sizeof(live_permanent));
 	for (timer = timer_head; timer; timer = timer->next)
 		if (!timer->temporary)
+		{
 			live_permanent[timer - timers] = 1;
+			live_tag[timer - timers] = timer->tag;
+			live_callback[timer - timers] = timer->callback;
+		}
 
 	/* the timers active in the save */
 	memset(saved_active, 0, sizeof(saved_active));
@@ -751,34 +745,23 @@ static void timer_postload(void)
 		timer->expire = ss_expire[i];
 	}
 	timer_head = index_to_timer(ss_heads[0]);
-	timer_free_head = index_to_timer(ss_heads[1]);
-	timer_free_tail = index_to_timer(ss_heads[2]);
 	global_offset = ss_global_offset;
 	callback_timer = NULL;
 	callback_timer_modified = 0;
 	ss_timers_loaded = 1;
 
 	/* a permanent timer allocated after the save is still held by its driver:
-	   it stays allocated, disabled, out of the free list */
+	   it stays allocated and disabled */
 	for (i = 0; i < MAX_TIMERS; i++)
 	{
-		mame_timer *t, *prev = NULL;
-
 		if (!live_permanent[i] || saved_active[i])
 			continue;
 
-		for (t = timer_free_head; t && t != &timers[i]; t = t->next)
-			prev = t;
-		if (t)
-		{
-			if (prev)
-				prev->next = t->next;
-			else
-				timer_free_head = t->next;
-			if (timer_free_tail == t)
-				timer_free_tail = prev;
-		}
-
+		timers[i].tag = live_tag[i];
+		timers[i].callback = live_callback[i];
+		timers[i].callback_param = 0;
+		timers[i].period = 0;
+		timers[i].start = 0;
 		timers[i].enabled = 0;
 		timers[i].temporary = 0;
 		timers[i].expire = TIME_NEVER;
@@ -806,7 +789,7 @@ void timer_save_init(void)
 	state_save_register_double("timer", 0, "period",        ss_period,   MAX_TIMERS);
 	state_save_register_double("timer", 0, "start",         ss_start,    MAX_TIMERS);
 	state_save_register_double("timer", 0, "expire",        ss_expire,   MAX_TIMERS);
-	state_save_register_INT32 ("timer", 0, "heads",         ss_heads,    3);
+	state_save_register_INT32 ("timer", 0, "head",          ss_heads,    1);
 	state_save_register_double("timer", 0, "global offset", &ss_global_offset, 1);
 	state_save_register_INT32 ("timer", 0, "fingerprint",   ss_fingerprint, SS_FINGERPRINT);
 	state_save_register_func_presave(timer_presave);
