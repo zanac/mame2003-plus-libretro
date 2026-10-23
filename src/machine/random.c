@@ -45,6 +45,10 @@
 
 /* modified for use in MAME */
 
+#include "driver.h"
+#include "state.h"
+#include "machine/random.h"
+
 /* Period parameters */
 #define N 624
 #define M 397
@@ -263,4 +267,56 @@ void mame_srand(unsigned long s)
 unsigned long mame_rand(void)
 {
 	return genrand_int32();
+}
+
+int mame_rand_int(void)
+{
+	return (int)(genrand_int32() & 0x7fffffffUL);
+}
+
+
+/*
+ * The generator state is in the save states, so that a loaded state gives
+ * the same numbers again (RunAhead, netplay rollback, replays). It is
+ * copied to 32-bit values, as unsigned long is 64-bit on some hosts.
+ */
+
+static UINT32 saved_state[N];
+static int saved_left;
+static int saved_next;
+
+static void mame_rand_presave(void)
+{
+	int i;
+
+	if (initf == 0)
+		init_genrand(5489UL);
+	for (i = 0; i < N; i++)
+		saved_state[i] = (UINT32)state[i];
+	saved_left = left;
+	saved_next = next ? (int)(next - state) : 0;
+}
+
+static void mame_rand_postload(void)
+{
+	int i;
+
+	for (i = 0; i < N; i++)
+		state[i] = saved_state[i];
+	left = saved_left;
+	next = state + saved_next;
+	initf = 1;
+}
+
+void mame_rand_init(void)
+{
+	/* the same seed the generator takes when it is not seeded, so the
+	   numbers of a session are the ones it gave before */
+	init_genrand(5489UL);
+
+	state_save_register_UINT32("mame_rand", 0, "state", saved_state, N);
+	state_save_register_int   ("mame_rand", 0, "left",  &saved_left);
+	state_save_register_int   ("mame_rand", 0, "next",  &saved_next);
+	state_save_register_func_presave(mame_rand_presave);
+	state_save_register_func_postload(mame_rand_postload);
 }

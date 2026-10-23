@@ -65,6 +65,15 @@ extern bool save_protection;
 static unsigned short input_port_value[MAX_INPUT_PORTS];
 static unsigned short input_vblank[MAX_INPUT_PORTS];
 
+/* joystick states of the 4-way restrictors: the direction kept for a
+   joystick depends on the previous frames, so they are in the save states */
+#define MAX_JOYSTICKS 3
+#define MAX_PLAYERS 8
+static int mJoyCurrent[MAX_JOYSTICKS*MAX_PLAYERS];
+static int mJoyPrevious[MAX_JOYSTICKS*MAX_PLAYERS];
+static int mJoy4Way[MAX_JOYSTICKS*MAX_PLAYERS];
+
+
 
 /***************************************************************************
 
@@ -708,6 +717,8 @@ getout:
 	   until the next one, so a loaded state must bring them back */
 	state_save_register_UINT16("input", 0, "port values", input_port_value, MAX_INPUT_PORTS);
 	state_save_register_UINT16("input", 0, "vblank",      input_vblank,     MAX_INPUT_PORTS);
+	state_save_register_INT32 ("input", 0, "joy current",  (INT32 *)mJoyCurrent,  MAX_JOYSTICKS*MAX_PLAYERS);
+	state_save_register_INT32 ("input", 0, "joy 4-way",    (INT32 *)mJoy4Way,     MAX_JOYSTICKS*MAX_PLAYERS);
 
 	update_input_ports();
 
@@ -1121,13 +1132,8 @@ profiler_mark(PROFILER_INPUT);
 	profiler_mark(PROFILER_END);
 }
 
-#define MAX_JOYSTICKS 3
-#define MAX_PLAYERS 8
-static int mJoyCurrent[MAX_JOYSTICKS*MAX_PLAYERS];
-static int mJoyPrevious[MAX_JOYSTICKS*MAX_PLAYERS];
-static int mJoy4Way[MAX_JOYSTICKS*MAX_PLAYERS];
 /*
-The above "Joy" states contain packed bits:
+The "Joy" states (declared at the top of the file) contain packed bits:
 	0001	up
 	0010	down
 	0100	left
@@ -1221,7 +1227,7 @@ ScanJoysticks( struct InputPort *in )
 				   *
 				   * For now, just resolve randomly.
 				   */
-				  if( rand()&1 )
+				  if( mame_rand_int()&1 )
 				  {
 				  	  mJoy4Way[i] &= 0x3; /* eliminate horizontal component */
 				  }
