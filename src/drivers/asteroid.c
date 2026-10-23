@@ -267,12 +267,26 @@ static MEMORY_WRITE_START( astdelux_writemem )
 MEMORY_END
 
 
+/* the thrust lever: the up/down lever (IN3) as before, or the right analog
+   stick (IN4, a fake port) pushed up, whichever asks for more thrust. The
+   stick gives back no thrust when released, as the lever spring would */
+static READ_HANDLER( llander_thrust_r )
+{
+	int lever = readinputport(3);
+	int stick = readinputport(4);
+
+	/* a small dead zone, so a resting stick gives no thrust */
+	stick = (stick <= 16) ? 0 : (stick - 16) * 254 / (254 - 16);
+
+	return (stick > lever) ? stick : lever;
+}
+
 static MEMORY_READ_START( llander_readmem )
 	{ 0x0000, 0x01ff, llander_zeropage_r },
 	{ 0x2000, 0x2000, llander_IN0_r }, /* IN0 */
 	{ 0x2400, 0x2407, asteroid_IN1_r }, /* IN1 */
 	{ 0x2800, 0x2803, asteroid_DSW1_r }, /* DSW1 */
-	{ 0x2c00, 0x2c00, input_port_3_r }, /* IN3 */
+	{ 0x2c00, 0x2c00, llander_thrust_r }, /* IN3, IN4 */
 	{ 0x4000, 0x47ff, MRA_RAM },
 	{ 0x4800, 0x5fff, MRA_ROM }, /* vector rom */
 	{ 0x6000, 0x7fff, MRA_ROM },
@@ -608,6 +622,10 @@ INPUT_PORTS_START( llander )
 	/* 0xff, so the range stops at 0xfe */
 	PORT_START /* IN3 */
 	PORT_ANALOGX( 0xff, 0x00, IPT_PADDLE|IPF_REVERSE, 100, 10, 0, 254, KEYCODE_UP, KEYCODE_DOWN, JOYCODE_1_UP, JOYCODE_1_DOWN )
+
+	/* fake: the thrust on the right analog stick, pushed up (see llander_thrust_r) */
+	PORT_START /* IN4 */
+	PORT_ANALOGX( 0xff, 0x00, IPT_AD_STICK_Z|IPF_REVERSE, 100, 0, 0, 254, IP_KEY_NONE, IP_KEY_NONE, JOYCODE_1_RIGHT_UP, JOYCODE_1_RIGHT_DOWN )
 INPUT_PORTS_END
 
 
@@ -657,6 +675,10 @@ INPUT_PORTS_START( llander1 )
 	/* 0xff, so the range stops at 0xfe */
 	PORT_START /* IN3 */
 	PORT_ANALOGX( 0xff, 0x00, IPT_PADDLE|IPF_REVERSE, 100, 10, 0, 254, KEYCODE_UP, KEYCODE_DOWN, JOYCODE_1_UP, JOYCODE_1_DOWN )
+
+	/* fake: the thrust on the right analog stick, pushed up (see llander_thrust_r) */
+	PORT_START /* IN4 */
+	PORT_ANALOGX( 0xff, 0x00, IPT_AD_STICK_Z|IPF_REVERSE, 100, 0, 0, 254, IP_KEY_NONE, IP_KEY_NONE, JOYCODE_1_RIGHT_UP, JOYCODE_1_RIGHT_DOWN )
 INPUT_PORTS_END
 
 
