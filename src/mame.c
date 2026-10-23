@@ -353,6 +353,9 @@ static int init_machine(void)
 	/* the random number generator of the emulation, in the save states */
 	mame_rand_init();
 
+	/* the timer system, in the save states */
+	timer_save_init();
+
 	/* load input ports settings (keys, dip switches, and so on) */
 	settingsloaded = load_input_port_settings();
 
