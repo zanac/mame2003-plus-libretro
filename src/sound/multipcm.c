@@ -104,19 +104,34 @@ typedef struct MultiPCM_t
 
 static MultiPCMT mpcm[MAX_MULTIPCM];
 
-static void MultiPCM_postload(void)
-{
-	int i, j, inum;
+/* save states: the sample pointer of each voice is saved as its offset in
+   the sample ROM (-1 = none), with the bank it was started with */
+static INT32 mpcm_samp_offset[MAX_MULTIPCM][28];
 
-	/* recalculate all the proper voice pointers*/
-	for (i = 0; i < 2; i++)
-	{
+static void MultiPCM_presave(void)
+{
+	int i, j;
+
+	for (i = 0; i < MAX_MULTIPCM; i++)
 		for (j = 0; j < 28; j++)
 		{
-			inum = mpcm[i].registers[j][1] | ((mpcm[i].registers[j][2]&0x1)<<8);
-		  	mpcm[i].Voices[j].pSamp = &mpcm[i].romptr[mpcm[i].samples[inum].st];
+			INT8 *p = mpcm[i].Voices[j].pSamp;
+
+			mpcm_samp_offset[i][j] = (p && mpcm[i].romptr) ? (INT32)(p - (INT8 *)mpcm[i].romptr) : -1;
 		}
-	}
+}
+
+static void MultiPCM_postload(void)
+{
+	int i, j;
+
+	for (i = 0; i < MAX_MULTIPCM; i++)
+		for (j = 0; j < 28; j++)
+		{
+			INT32 o = mpcm_samp_offset[i][j];
+
+			mpcm[i].Voices[j].pSamp = (o >= 0 && mpcm[i].romptr) ? (INT8 *)&mpcm[i].romptr[o] : NULL;
+		}
 }
 
 static void MultiPCM_update(int chip, INT16 **buffer, int length )
@@ -340,12 +355,15 @@ int MultiPCM_sh_start(const struct MachineSound *msound)
 			state_save_register_INT32(mname2, 1, "ptsum", &mpcm[i].Voices[v].ptsum, 1);
 			state_save_register_int(mname2, 1, "relamt", &mpcm[i].Voices[v].relamt);
 			state_save_register_INT8(mname2, 1, "relstage", &mpcm[i].Voices[v].relstage, 1);
+			state_save_register_int(mname2, 1, "relcount", &mpcm[i].Voices[v].relcount);
+			state_save_register_INT32(mname2, 1, "sample", &mpcm_samp_offset[i][v], 1);
 		}
 
 		state_save_register_int(mname, i, "curreg", &mpcm[i].curreg);
 		state_save_register_int(mname, i, "curvoice", &mpcm[i].curvoice);
 	}
 
+	state_save_register_func_presave(MultiPCM_presave);
 	state_save_register_func_postload(MultiPCM_postload);
 
 	return 0;

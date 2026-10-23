@@ -1790,6 +1790,9 @@ static void FMsave_state_channel(const char *name,int num,FM_CH *CH,int num_ch)
 		sprintf(state_name,"%s.CH%d",name,ch);
 		state_save_register_INT32(state_name, num, "feedback" , CH->op1_out , 2);
 		state_save_register_UINT32(state_name, num, "phasestep"   , &CH->fc , 1);
+		state_save_register_UINT8 (state_name, num, "kcode"       , &CH->kcode , 1);
+		state_save_register_UINT32(state_name, num, "block_fnum"  , &CH->block_fnum , 1);
+		state_save_register_INT32 (state_name, num, "mem_value"   , &CH->mem_value , 1);
 		/* slots */
 		for(slot=0;slot<4;slot++)
 		{
@@ -1799,8 +1802,66 @@ static void FMsave_state_channel(const char *name,int num,FM_CH *CH,int num_ch)
 			state_save_register_UINT32(state_name, num, "phasecount" , &SLOT->phase, 1);
 			state_save_register_UINT8 (state_name, num, "state"      , &SLOT->state, 1);
 			state_save_register_INT32 (state_name, num, "volume"     , &SLOT->volume, 1);
+			state_save_register_UINT32(state_name, num, "vol_out"    , &SLOT->vol_out, 1);
+			state_save_register_UINT32(state_name, num, "key"        , &SLOT->key, 1);
 		}
 	}
+}
+
+/* The SSG-EG negation flags: the chip postload writes the registers again,
+   and the SSG-EG register resets them, so they are saved in a copy and put
+   back after the chip postload (the functions are registered before it, and
+   postload functions run last registered first). */
+#define FM_SSGN_TYPES 4
+#define FM_SSGN_CHIPS 4
+static UINT8 fm_ssgn_copy[FM_SSGN_TYPES][FM_SSGN_CHIPS][6*4];
+
+static void FM_ssgn_copy(FM_CH *CH, int num_ch, UINT8 *copy, int save)
+{
+	int ch, slot;
+
+	for (ch = 0; ch < num_ch; ch++)
+		for (slot = 0; slot < 4; slot++)
+		{
+			if (save)
+				copy[ch*4+slot] = CH[ch].SLOT[slot].ssgn;
+			else
+				CH[ch].SLOT[slot].ssgn = copy[ch*4+slot];
+		}
+}
+
+/* presave and postload functions of one chip type */
+#define FM_SSGN_FUNCS(chip, chips, idx, num_ch) \
+static void chip##_ssgn_presave(void) \
+{ \
+	int num; \
+	for (num = 0; num < chip##NumChips && num < FM_SSGN_CHIPS; num++) \
+		FM_ssgn_copy(chips[num].CH, num_ch, fm_ssgn_copy[idx][num], 1); \
+} \
+static void chip##_ssgn_postload(void) \
+{ \
+	int num; \
+	for (num = 0; num < chip##NumChips && num < FM_SSGN_CHIPS; num++) \
+		FM_ssgn_copy(chips[num].CH, num_ch, fm_ssgn_copy[idx][num], 0); \
+}
+
+/* call before the chip postload is registered */
+#define FM_SSGN_REGISTER(chip, idx, num_ch, statename) \
+	{ \
+		int n; \
+		for (n = 0; n < chip##NumChips && n < FM_SSGN_CHIPS; n++) \
+			state_save_register_UINT8(statename, n, "ssgn", fm_ssgn_copy[idx][n], num_ch*4); \
+		state_save_register_func_presave(chip##_ssgn_presave); \
+		state_save_register_func_postload(chip##_ssgn_postload); \
+	}
+
+/* the envelope and LFO counters, and the 3 slot mode frequencies */
+static void FMsave_state_opn(const char *state_name,int num,FM_OPN *OPN)
+{
+	state_save_register_UINT32(state_name, num, "eg_cnt"     , &OPN->eg_cnt, 1);
+	state_save_register_UINT32(state_name, num, "eg_timer"   , &OPN->eg_timer, 1);
+	state_save_register_UINT32(state_name, num, "lfo_cnt"    , &OPN->lfo_cnt, 1);
+	state_save_register_UINT32(state_name, num, "slot3fnum"  , OPN->SL3.block_fnum, 3);
 }
 
 static void FMsave_state_st(const char *state_name,int num,FM_ST *ST)
@@ -2342,16 +2403,21 @@ static void YM2203_postload(void)
 	cur_chip = NULL;
 }
 
+FM_SSGN_FUNCS(YM2203, FM2203, 0, 3)
+
 static void YM2203_save_state(void)
 {
 	int num;
 	const char statename[] = "YM2203";
+
+	FM_SSGN_REGISTER(YM2203, 0, 3, statename)
 
 	for(num=0;num<YM2203NumChips;num++)
 	{
 		state_save_register_UINT8 (statename, num, "regs"   , FM2203[num].REGS   , 256);
 		FMsave_state_st(statename,num,&FM2203[num].OPN.ST);
 		FMsave_state_channel(statename,num,FM2203[num].CH,3);
+		FMsave_state_opn(statename,num,&FM2203[num].OPN);
 		/* 3slots */
 		state_save_register_UINT32 (statename, num, "slot3fc" , FM2203[num].OPN.SL3.fc , 3);
 		state_save_register_UINT8  (statename, num, "slot3fh" , &FM2203[num].OPN.SL3.fn_h , 1);
@@ -3583,10 +3649,14 @@ static void YM2608_postload(void)
 	cur_chip = NULL;
 }
 
+FM_SSGN_FUNCS(YM2608, FM2608, 1, 6)
+
 static void YM2608_save_state(void)
 {
 	int num;
 	const char statename[] = "YM2608";
+
+	FM_SSGN_REGISTER(YM2608, 1, 6, statename)
 
 	for(num=0;num<YM2608NumChips;num++)
 	{
@@ -3595,6 +3665,7 @@ static void YM2608_save_state(void)
 		state_save_register_UINT8 (statename, num, "regs"   , F2608->REGS   , 512);
 		FMsave_state_st(statename,num,&FM2608[num].OPN.ST);
 		FMsave_state_channel(statename,num,FM2608[num].CH,6);
+		FMsave_state_opn(statename,num,&FM2608[num].OPN);
 		/* 3slots */
 		state_save_register_UINT32(statename, num, "slot3fc" , F2608->OPN.SL3.fc   , 3);
 		state_save_register_UINT8 (statename, num, "slot3fh" , &F2608->OPN.SL3.fn_h, 1);
@@ -4373,10 +4444,14 @@ void YM2610_ext_state_register(int chips)
 	state_save_register_func_postload(YM2610_ext_postload);
 }
 
+FM_SSGN_FUNCS(YM2610, FM2610, 2, 6)
+
 static void YM2610_save_state(void)
 {
 	int num;
 	const char statename[] = "YM2610";
+
+	FM_SSGN_REGISTER(YM2610, 2, 6, statename)
 
 	for(num=0;num<YM2610NumChips;num++)
 	{
@@ -4385,6 +4460,7 @@ static void YM2610_save_state(void)
 		state_save_register_UINT8 (statename, num, "regs"   , F2610->REGS   , 512);
 		FMsave_state_st(statename,num,&FM2610[num].OPN.ST);
 		FMsave_state_channel(statename,num,FM2610[num].CH,6);
+		FMsave_state_opn(statename,num,&FM2610[num].OPN);
 		/* 3slots */
 		state_save_register_UINT32(statename, num, "slot3fc" , F2610->OPN.SL3.fc   , 3);
 		state_save_register_UINT8 (statename, num, "slot3fh" , &F2610->OPN.SL3.fn_h, 1);
@@ -4877,16 +4953,21 @@ static void YM2612_postload(void)
 	cur_chip = NULL;
 }
 
+FM_SSGN_FUNCS(YM2612, FM2612, 3, 6)
+
 static void YM2612_save_state(void)
 {
 	int num;
 	const char statename[] = "YM2612";
+
+	FM_SSGN_REGISTER(YM2612, 3, 6, statename)
 
 	for(num=0;num<YM2612NumChips;num++)
 	{
 		state_save_register_UINT8 (statename, num, "regs"   , FM2612[num].REGS   , 512);
 		FMsave_state_st(statename,num,&FM2612[num].OPN.ST);
 		FMsave_state_channel(statename,num,FM2612[num].CH,6);
+		FMsave_state_opn(statename,num,&FM2612[num].OPN);
 		/* 3slots */
 		state_save_register_UINT32 (statename, num, "slot3fc" , FM2612[num].OPN.SL3.fc ,   3);
 		state_save_register_UINT8  (statename, num, "slot3fh" , &FM2612[num].OPN.SL3.fn_h, 1);

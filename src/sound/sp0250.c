@@ -17,6 +17,7 @@
 #include <math.h>
 #include "driver.h"
 #include "cpuintrf.h"
+#include "state.h"
 
 enum { MAIN_CLOCK = 10000 };
 
@@ -173,6 +174,29 @@ int sp0250_sh_start( const struct MachineSound *msound )
 	timer_pulse(TIME_IN_HZ(MAIN_CLOCK), 0, sp0250_timer_tick);
 
 	sp0250.stream = stream_init("SP0250", intf->volume, MAIN_CLOCK, 0, sp0250_update);
+
+	/* save states: the whole chip state, without the stream and the callback */
+	{
+		int f;
+		state_save_register_INT16 ("sp0250", 0, "amp",      &sp0250.amp, 1);
+		state_save_register_UINT8 ("sp0250", 0, "pitch",    &sp0250.pitch, 1);
+		state_save_register_UINT8 ("sp0250", 0, "repeat",   &sp0250.repeat, 1);
+		state_save_register_UINT8 ("sp0250", 0, "pcount",   &sp0250.pcount, 1);
+		state_save_register_UINT8 ("sp0250", 0, "rcount",   &sp0250.rcount, 1);
+		state_save_register_UINT8 ("sp0250", 0, "pcounto",  &sp0250.pcounto, 1);
+		state_save_register_UINT8 ("sp0250", 0, "rcounto",  &sp0250.rcounto, 1);
+		state_save_register_UINT32("sp0250", 0, "RNG",      &sp0250.RNG, 1);
+		state_save_register_int   ("sp0250", 0, "voiced",   &sp0250.voiced);
+		state_save_register_UINT8 ("sp0250", 0, "fifo",     sp0250.fifo, 15);
+		state_save_register_int   ("sp0250", 0, "fifo_pos", &sp0250.fifo_pos);
+		for (f = 0; f < 6; f++)
+		{
+			state_save_register_INT16("sp0250", f, "F",  &sp0250.filter[f].F, 1);
+			state_save_register_INT16("sp0250", f, "B",  &sp0250.filter[f].B, 1);
+			state_save_register_INT16("sp0250", f, "z1", &sp0250.filter[f].z1, 1);
+			state_save_register_INT16("sp0250", f, "z2", &sp0250.filter[f].z2, 1);
+		}
+	}
 
 	return 0;
 }

@@ -45,6 +45,7 @@ differences between OPL2 and OPL3 shown in datasheets:
 
 #include "driver.h"		/* use M.A.M.E. */
 #include "ymf262.h"
+#include "state.h"
 
 #ifndef PI
 #define PI 3.14159265358979323846
@@ -2458,6 +2459,135 @@ static int OPL3TimerOver(OPL3 *chip,int c)
 static OPL3 *YMF262[MAX_OPL3_CHIPS];	/* array of pointers to the YMF262's */
 static int YMF262NumChips = 0;				/* number of chips */
 
+/* save states: the chip state (channels, slots, envelope and LFO counters,
+   noise, timers and status), so that a loaded state plays the same sound
+   and gives the same timer status again. The output pointer of each slot
+   is saved as an index: 0-17 chanout[], 18 phase_modulation,
+   19 phase_modulation2, 0xff none. */
+static UINT8 opl3_connect[MAX_OPL3_CHIPS][18*2];
+
+static UINT8 OPL3_connect_index(INT32 *connect)
+{
+	if (connect == &phase_modulation)  return 18;
+	if (connect == &phase_modulation2) return 19;
+	if (connect >= &chanout[0] && connect < &chanout[18]) return (UINT8)(connect - &chanout[0]);
+	return 0xff;
+}
+
+static void OPL3_presave(void)
+{
+	int i, ch, sl;
+
+	for (i = 0; i < YMF262NumChips; i++)
+		for (ch = 0; ch < 18; ch++)
+			for (sl = 0; sl < 2; sl++)
+				opl3_connect[i][ch*2+sl] = OPL3_connect_index(YMF262[i]->P_CH[ch].SLOT[sl].connect);
+}
+
+static void OPL3_postload(void)
+{
+	int i, ch, sl;
+
+	for (i = 0; i < YMF262NumChips; i++)
+		for (ch = 0; ch < 18; ch++)
+			for (sl = 0; sl < 2; sl++)
+			{
+				UINT8 c = opl3_connect[i][ch*2+sl];
+				OPL3_SLOT *SLOT = &YMF262[i]->P_CH[ch].SLOT[sl];
+
+				if (c < 18)        SLOT->connect = &chanout[c];
+				else if (c == 18)  SLOT->connect = &phase_modulation;
+				else if (c == 19)  SLOT->connect = &phase_modulation2;
+				else               SLOT->connect = NULL;
+			}
+}
+
+static void OPL3_save_state(OPL3 *chip, int num)
+{
+	static const char name[] = "YMF262";
+	int ch, sl;
+	char buf[40];
+
+	for (ch = 0; ch < 18; ch++)
+	{
+		OPL3_CH *CH = &chip->P_CH[ch];
+
+		sprintf(buf, "ch%d.block_fnum", ch); state_save_register_UINT32(name, num, buf, &CH->block_fnum, 1);
+		sprintf(buf, "ch%d.fc", ch);         state_save_register_UINT32(name, num, buf, &CH->fc, 1);
+		sprintf(buf, "ch%d.ksl_base", ch);   state_save_register_UINT32(name, num, buf, &CH->ksl_base, 1);
+		sprintf(buf, "ch%d.kcode", ch);      state_save_register_UINT8 (name, num, buf, &CH->kcode, 1);
+		sprintf(buf, "ch%d.extended", ch);   state_save_register_UINT8 (name, num, buf, &CH->extended, 1);
+
+		for (sl = 0; sl < 2; sl++)
+		{
+			OPL3_SLOT *SLOT = &CH->SLOT[sl];
+
+#define OPL3_SAVE_SLOT(type, field) \
+			sprintf(buf, "ch%d.sl%d." #field, ch, sl); \
+			state_save_register_##type(name, num, buf, &SLOT->field, 1)
+
+			OPL3_SAVE_SLOT(UINT32, ar);
+			OPL3_SAVE_SLOT(UINT32, dr);
+			OPL3_SAVE_SLOT(UINT32, rr);
+			OPL3_SAVE_SLOT(UINT8,  KSR);
+			OPL3_SAVE_SLOT(UINT8,  ksl);
+			OPL3_SAVE_SLOT(UINT8,  ksr);
+			OPL3_SAVE_SLOT(UINT8,  mul);
+			OPL3_SAVE_SLOT(UINT32, Cnt);
+			OPL3_SAVE_SLOT(UINT32, Incr);
+			OPL3_SAVE_SLOT(UINT8,  FB);
+			OPL3_SAVE_SLOT(UINT8,  CON);
+			OPL3_SAVE_SLOT(UINT8,  eg_type);
+			OPL3_SAVE_SLOT(UINT8,  state);
+			OPL3_SAVE_SLOT(UINT32, TL);
+			OPL3_SAVE_SLOT(INT32,  TLL);
+			OPL3_SAVE_SLOT(INT32,  volume);
+			OPL3_SAVE_SLOT(UINT32, sl);
+			OPL3_SAVE_SLOT(UINT32, eg_m_ar);
+			OPL3_SAVE_SLOT(UINT8,  eg_sh_ar);
+			OPL3_SAVE_SLOT(UINT8,  eg_sel_ar);
+			OPL3_SAVE_SLOT(UINT32, eg_m_dr);
+			OPL3_SAVE_SLOT(UINT8,  eg_sh_dr);
+			OPL3_SAVE_SLOT(UINT8,  eg_sel_dr);
+			OPL3_SAVE_SLOT(UINT32, eg_m_rr);
+			OPL3_SAVE_SLOT(UINT8,  eg_sh_rr);
+			OPL3_SAVE_SLOT(UINT8,  eg_sel_rr);
+			OPL3_SAVE_SLOT(UINT32, key);
+			OPL3_SAVE_SLOT(UINT32, AMmask);
+			OPL3_SAVE_SLOT(UINT8,  vib);
+			OPL3_SAVE_SLOT(UINT8,  waveform_number);
+			OPL3_SAVE_SLOT(UINT32, wavetable);
+#undef OPL3_SAVE_SLOT
+			sprintf(buf, "ch%d.sl%d.op1_out", ch, sl); state_save_register_INT32(name, num, buf, SLOT->op1_out, 2);
+		}
+	}
+
+	state_save_register_UINT32(name, num, "pan",            chip->pan, 18*4);
+	state_save_register_UINT32(name, num, "pan_ctrl_value", chip->pan_ctrl_value, 18);
+	state_save_register_UINT32(name, num, "eg_cnt",         &chip->eg_cnt, 1);
+	state_save_register_UINT32(name, num, "eg_timer",       &chip->eg_timer, 1);
+	state_save_register_UINT8 (name, num, "lfo_am_depth",   &chip->lfo_am_depth, 1);
+	state_save_register_UINT8 (name, num, "lfo_pm_depth_range", &chip->lfo_pm_depth_range, 1);
+	state_save_register_UINT32(name, num, "lfo_am_cnt",     &chip->lfo_am_cnt, 1);
+	state_save_register_UINT32(name, num, "lfo_pm_cnt",     &chip->lfo_pm_cnt, 1);
+	state_save_register_UINT32(name, num, "noise_rng",      &chip->noise_rng, 1);
+	state_save_register_UINT32(name, num, "noise_p",        &chip->noise_p, 1);
+	state_save_register_UINT8 (name, num, "OPL3_mode",      &chip->OPL3_mode, 1);
+	state_save_register_UINT8 (name, num, "rhythm",         &chip->rhythm, 1);
+	state_save_register_INT32 (name, num, "T",              chip->T, 2);
+	state_save_register_UINT8 (name, num, "st",             chip->st, 2);
+	state_save_register_UINT32(name, num, "address",        &chip->address, 1);
+	state_save_register_UINT8 (name, num, "status",         &chip->status, 1);
+	state_save_register_UINT8 (name, num, "statusmask",     &chip->statusmask, 1);
+	state_save_register_UINT8 (name, num, "nts",            &chip->nts, 1);
+	state_save_register_UINT8 (name, num, "connect",        opl3_connect[num], 18*2);
+	if (num == 0)
+	{
+		state_save_register_func_presave(OPL3_presave);
+		state_save_register_func_postload(OPL3_postload);
+	}
+}
+
 int YMF262Init(int num, int clock, int rate)
 {
 	int i;
@@ -2477,6 +2607,7 @@ int YMF262Init(int num, int clock, int rate)
 			YMF262NumChips = 0;
 			return -1;
 		}
+		OPL3_save_state(YMF262[i], i);
 	}
 
 	return 0;

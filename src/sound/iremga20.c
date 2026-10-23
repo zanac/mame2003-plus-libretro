@@ -58,15 +58,15 @@ static struct IremGA20_chip_def
 
 static struct IremGA20_channel_def
 {
-	unsigned long rate;
-	unsigned long size;
-	unsigned long start;
-	unsigned long pos;
-	unsigned long end;
-	unsigned long volume;
-	unsigned long pan;
-	unsigned long effect;
-	unsigned long play;
+	UINT32 rate;
+	UINT32 size;
+	UINT32 start;
+	UINT32 pos;
+	UINT32 end;
+	UINT32 volume;
+	UINT32 pan;
+	UINT32 effect;
+	UINT32 play;
 } IremGA20_channel[4];
 
 static int sr_table[256];
@@ -248,8 +248,22 @@ int IremGA20_sh_start(const struct MachineSound *msound)
 			IremGA20_chip.intf->mixing_level, Machine->sample_rate,
 			0, IremGA20_update );
 
-	state_save_register_UINT8("sound", 0, "IremGA20_channel", (UINT8*) IremGA20_channel, sizeof(IremGA20_channel));
-	state_save_register_UINT8("sound", 0, "IremGA20_chip",    (UINT8*) &IremGA20_chip,   sizeof(IremGA20_chip));
+	/* save each field: the chip structure also has the ROM and interface
+	   pointers, which differ between runs and machines */
+	for (i = 0; i < 4; i++)
+	{
+		state_save_register_UINT32("IremGA20", i, "rate",   &IremGA20_channel[i].rate, 1);
+		state_save_register_UINT32("IremGA20", i, "size",   &IremGA20_channel[i].size, 1);
+		state_save_register_UINT32("IremGA20", i, "start",  &IremGA20_channel[i].start, 1);
+		state_save_register_UINT32("IremGA20", i, "pos",    &IremGA20_channel[i].pos, 1);
+		state_save_register_UINT32("IremGA20", i, "end",    &IremGA20_channel[i].end, 1);
+		state_save_register_UINT32("IremGA20", i, "volume", &IremGA20_channel[i].volume, 1);
+		state_save_register_UINT32("IremGA20", i, "pan",    &IremGA20_channel[i].pan, 1);
+		state_save_register_UINT32("IremGA20", i, "effect", &IremGA20_channel[i].effect, 1);
+		state_save_register_UINT32("IremGA20", i, "play",   &IremGA20_channel[i].play, 1);
+	}
+	state_save_register_INT32("IremGA20", 0, "regs", IremGA20_chip.regs, 0x40);
+	state_save_register_int  ("IremGA20", 0, "mode", &IremGA20_chip.mode);
 
 	return 0;
 }

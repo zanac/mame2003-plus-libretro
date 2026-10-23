@@ -19,6 +19,7 @@
 #include <math.h>
 
 #include "driver.h"
+#include "state.h"
 #include "cpu/z80/z80.h"
 
 
@@ -70,6 +71,16 @@ static int vol_noise8[MAX_ASTROCADE_CHIPS];
 static int randbyte = 0;
 static int randbit = 1;
 
+/* the noise generator of the chips: its own numbers, in the save states,
+   so that a loaded state plays the same sound again */
+static UINT32 noise_seed = 1;
+
+static int astrocade_noise(void)
+{
+	noise_seed = noise_seed * 1103515245 + 12345;
+	return (noise_seed >> 16) & 0x7fff;
+}
+
 static void astrocade_update(int num, int newpos)
 {
 	INT16 *buffer = astrocade_buffer[num];
@@ -81,7 +92,7 @@ static void astrocade_update(int num, int newpos)
 	{
 		if (current_count_N[i] == 0)
 		{
-			randbyte = rand() & 0xff;
+			randbyte = astrocade_noise() & 0xff;
 		}
 
 		current_size_V[num] = 32768*vibrato_speed[num]/div_by_N_factor;
@@ -111,7 +122,7 @@ static void astrocade_update(int num, int newpos)
 
 		if (noise_am[num])
 		{
-			randbit = rand() & 1;
+			randbit = astrocade_noise() & 1;
 			data = data + randbit*vol_noise4[num];
 		}
 
@@ -197,6 +208,38 @@ int astrocade_sh_start(const struct MachineSound *msound)
 		current_state_C[i] = 1;
 		current_state_V[i] = 1;
 	}
+
+	state_save_register_INT32("astrocade", 0, "sample_pos", (INT32 *)sample_pos, intf->num);
+	state_save_register_INT32("astrocade", 0, "count_A", (INT32 *)current_count_A, intf->num);
+	state_save_register_INT32("astrocade", 0, "count_B", (INT32 *)current_count_B, intf->num);
+	state_save_register_INT32("astrocade", 0, "count_C", (INT32 *)current_count_C, intf->num);
+	state_save_register_INT32("astrocade", 0, "count_V", (INT32 *)current_count_V, intf->num);
+	state_save_register_INT32("astrocade", 0, "count_N", (INT32 *)current_count_N, intf->num);
+	state_save_register_INT32("astrocade", 0, "state_A", (INT32 *)current_state_A, intf->num);
+	state_save_register_INT32("astrocade", 0, "state_B", (INT32 *)current_state_B, intf->num);
+	state_save_register_INT32("astrocade", 0, "state_C", (INT32 *)current_state_C, intf->num);
+	state_save_register_INT32("astrocade", 0, "state_V", (INT32 *)current_state_V, intf->num);
+	state_save_register_INT32("astrocade", 0, "size_A", (INT32 *)current_size_A, intf->num);
+	state_save_register_INT32("astrocade", 0, "size_B", (INT32 *)current_size_B, intf->num);
+	state_save_register_INT32("astrocade", 0, "size_C", (INT32 *)current_size_C, intf->num);
+	state_save_register_INT32("astrocade", 0, "size_V", (INT32 *)current_size_V, intf->num);
+	state_save_register_INT32("astrocade", 0, "size_N", (INT32 *)current_size_N, intf->num);
+	state_save_register_INT32("astrocade", 0, "master_osc", (INT32 *)master_osc, intf->num);
+	state_save_register_INT32("astrocade", 0, "freq_A", (INT32 *)freq_A, intf->num);
+	state_save_register_INT32("astrocade", 0, "freq_B", (INT32 *)freq_B, intf->num);
+	state_save_register_INT32("astrocade", 0, "freq_C", (INT32 *)freq_C, intf->num);
+	state_save_register_INT32("astrocade", 0, "vol_A", (INT32 *)vol_A, intf->num);
+	state_save_register_INT32("astrocade", 0, "vol_B", (INT32 *)vol_B, intf->num);
+	state_save_register_INT32("astrocade", 0, "vol_C", (INT32 *)vol_C, intf->num);
+	state_save_register_INT32("astrocade", 0, "vibrato", (INT32 *)vibrato, intf->num);
+	state_save_register_INT32("astrocade", 0, "vibrato_speed", (INT32 *)vibrato_speed, intf->num);
+	state_save_register_INT32("astrocade", 0, "mux", (INT32 *)mux, intf->num);
+	state_save_register_INT32("astrocade", 0, "noise_am", (INT32 *)noise_am, intf->num);
+	state_save_register_INT32("astrocade", 0, "vol_noise4", (INT32 *)vol_noise4, intf->num);
+	state_save_register_INT32("astrocade", 0, "vol_noise8", (INT32 *)vol_noise8, intf->num);
+	state_save_register_int  ("astrocade", 0, "randbyte", &randbyte);
+	state_save_register_int  ("astrocade", 0, "randbit", &randbit);
+	state_save_register_UINT32("astrocade", 0, "noise_seed", &noise_seed, 1);
 
 	return 0;
 }

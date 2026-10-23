@@ -29,6 +29,7 @@
 #include <math.h>
 #include "driver.h"
 #include "cpuintrf.h"
+#include "state.h"
 
 #undef VERBOSE
 
@@ -636,6 +637,73 @@ static void ymf278b_data_port_C_w(int num, UINT8 data)
 	ymf278b_C_w(num, YMF278B[num].port_C, data);
 }
 
+/* save states: the PCM slots, the timers and IRQ status and the
+   registers that the CPU reads back */
+static void ymf278b_save_state(int num)
+{
+	static const char name[] = "YMF278B";
+	YMF278BChip *chip = &YMF278B[num];
+	char buf[40];
+	int i;
+
+	for (i = 0; i < 24; i++)
+	{
+		YMF278BSlot *slot = &chip->slots[i];
+
+#define YMF278B_SAVE_SLOT(type, field) \
+		sprintf(buf, "slot%d." #field, i); \
+		state_save_register_##type(name, num, buf, &slot->field, 1)
+
+		YMF278B_SAVE_SLOT(INT16,  wave);
+		YMF278B_SAVE_SLOT(INT16,  FN);
+		YMF278B_SAVE_SLOT(INT8,   OCT);
+		YMF278B_SAVE_SLOT(INT8,   PRVB);
+		YMF278B_SAVE_SLOT(INT8,   LD);
+		YMF278B_SAVE_SLOT(INT8,   TL);
+		YMF278B_SAVE_SLOT(INT8,   pan);
+		YMF278B_SAVE_SLOT(INT8,   lfo);
+		YMF278B_SAVE_SLOT(INT8,   vib);
+		YMF278B_SAVE_SLOT(INT8,   AM);
+		YMF278B_SAVE_SLOT(INT8,   AR);
+		YMF278B_SAVE_SLOT(INT8,   D1R);
+		YMF278B_SAVE_SLOT(INT8,   DL);
+		YMF278B_SAVE_SLOT(INT8,   D2R);
+		YMF278B_SAVE_SLOT(INT8,   RC);
+		YMF278B_SAVE_SLOT(INT8,   RR);
+		YMF278B_SAVE_SLOT(UINT32, step);
+		YMF278B_SAVE_SLOT(UINT32, stepptr);
+		YMF278B_SAVE_SLOT(INT8,   active);
+		YMF278B_SAVE_SLOT(INT8,   KEY_ON);
+		YMF278B_SAVE_SLOT(INT8,   bits);
+		YMF278B_SAVE_SLOT(UINT32, startaddr);
+		YMF278B_SAVE_SLOT(UINT32, loopaddr);
+		YMF278B_SAVE_SLOT(UINT32, endaddr);
+		YMF278B_SAVE_SLOT(INT32,  env_step);
+		YMF278B_SAVE_SLOT(UINT32, env_vol);
+		YMF278B_SAVE_SLOT(UINT32, env_vol_step);
+		YMF278B_SAVE_SLOT(UINT32, env_vol_lim);
+#undef YMF278B_SAVE_SLOT
+	}
+
+	state_save_register_INT8  (name, num, "lsitest0",      &chip->lsitest0, 1);
+	state_save_register_INT8  (name, num, "lsitest1",      &chip->lsitest1, 1);
+	state_save_register_INT8  (name, num, "wavetblhdr",    &chip->wavetblhdr, 1);
+	state_save_register_INT8  (name, num, "memmode",       &chip->memmode, 1);
+	state_save_register_INT32 (name, num, "memadr",        &chip->memadr, 1);
+	state_save_register_INT32 (name, num, "fm_l",          &chip->fm_l, 1);
+	state_save_register_INT32 (name, num, "fm_r",          &chip->fm_r, 1);
+	state_save_register_INT32 (name, num, "pcm_l",         &chip->pcm_l, 1);
+	state_save_register_INT32 (name, num, "pcm_r",         &chip->pcm_r, 1);
+	state_save_register_UINT8 (name, num, "timer_a_count", &chip->timer_a_count, 1);
+	state_save_register_UINT8 (name, num, "timer_b_count", &chip->timer_b_count, 1);
+	state_save_register_UINT8 (name, num, "enable",        &chip->enable, 1);
+	state_save_register_UINT8 (name, num, "current_irq",   &chip->current_irq, 1);
+	state_save_register_INT32 (name, num, "irq_line",      &chip->irq_line, 1);
+	state_save_register_UINT8 (name, num, "port_A",        &chip->port_A, 1);
+	state_save_register_UINT8 (name, num, "port_B",        &chip->port_B, 1);
+	state_save_register_UINT8 (name, num, "port_C",        &chip->port_C, 1);
+}
+
 static void ymf278b_init(INT8 num, UINT8 *rom, void (*cb)(int), int clock)
 {
 	memset(&YMF278B[num], 0, sizeof(YMF278BChip));
@@ -645,6 +713,7 @@ static void ymf278b_init(INT8 num, UINT8 *rom, void (*cb)(int), int clock)
 	YMF278B[num].timer_b = timer_alloc(ymf278b_timer_b_tick);
 	YMF278B[num].irq_line = CLEAR_LINE;
 	YMF278B[num].clock_ratio = (float)clock / (float)YMF278B_STD_CLOCK;
+	ymf278b_save_state(num);
 }
 
 int YMF278B_sh_start( const struct MachineSound *msound )
