@@ -802,6 +802,23 @@ static struct retro_core_option_v2_definition option_def_sh2_dynarec = {
    "disabled"
 };
 
+static struct retro_core_option_v2_definition option_def_stv_video_threads = {
+   APPNAME"_stv_video_threads",
+   "ST-V Threaded Video",
+   NULL,
+   "Draw the ST-V screen in horizontal bands on several threads (same picture, faster on multi-core hosts).",
+   NULL,
+   NULL,
+   {
+      { "disabled", NULL },
+      { "2",        NULL },
+      { "3",        NULL },
+      { "4",        NULL },
+      { NULL, NULL },
+   },
+   "disabled"
+};
+
 static struct retro_core_option_v2_definition option_def_adsp_dynarec = {
    APPNAME"_adsp_dynarec",
    "ADSP Dynarec",
@@ -954,6 +971,7 @@ void init_core_options(void)
   default_options[OPT_MIPS_DYNAREC]              = option_def_mips_dynarec;
   default_options[OPT_ADSP_DYNAREC]              = option_def_adsp_dynarec;
   default_options[OPT_SH2_DYNAREC]               = option_def_sh2_dynarec;
+  default_options[OPT_STV_VIDEO_THREADS]         = option_def_stv_video_threads;
   default_options[OPT_OVERRIDE_AD_STICK]         = option_def_override_ad_stick;
   default_options[OPT_INPUT_TOGGLE]              = option_def_input_toggle;
 #if (HAS_CYCLONE || HAS_DRZ80)
@@ -997,6 +1015,10 @@ static void set_variables(void)
       case OPT_SH2_DYNAREC:
          if(!options.content_flags[CONTENT_SH2_DYNAREC])
            continue; /* only offered for the games that use the recompiler */
+         break;
+      case OPT_STV_VIDEO_THREADS:
+         if(!options.content_flags[CONTENT_STV_VIDEO_THREADS])
+           continue; /* ST-V only, where threads are compiled in */
          break;
       case OPT_NEOGEO_BIOS:
           if(!options.content_flags[CONTENT_NEOGEO])
@@ -1310,6 +1332,10 @@ void update_variables(bool first_time)
             options.sh2_dynarec = false;
           break;
 
+        case OPT_STV_VIDEO_THREADS:
+          options.stv_video_threads = atoi(var.value);	/* 0 for "disabled" */
+          break;
+
         case OPT_ADSP_DYNAREC:
           if(strcmp(var.value, "enabled") == 0)
             options.adsp_dynarec = true;
@@ -1452,6 +1478,10 @@ void set_content_flags(void)
     if (game_driver->source_file && strstr(game_driver->source_file, "stv.c") && sh2_jit_available())
       options.content_flags[CONTENT_SH2_DYNAREC] = true;
   }
+#endif
+#if (HAS_SH2) && defined(HAVE_THREADS)
+  if (game_driver->source_file && strstr(game_driver->source_file, "stv.c"))
+    options.content_flags[CONTENT_STV_VIDEO_THREADS] = true;
 #endif
 
   /************ DRIVERS WITH MULTIPLE BIOS OPTIONS ************/

@@ -110,6 +110,35 @@ static void log_masked(int mask, const char *fmt, ...) { (void)mask; (void)fmt; 
 
 #define LOG_VDP2 (1U << 1)
 #define LOG_ROZ  (1U << 2)
+
+/*
+	Threaded video: the screen can be drawn in horizontal bands by
+	several threads (the "ST-V Threaded Video" core option). The state a
+	layer keeps while it draws is per thread (VDP2_TLS), the rest is only
+	read while the bands are drawn: the rotation plane caches are brought
+	up to date before, by the main thread alone (VDP2_RENDER_PREPASS).
+*/
+#ifdef HAVE_THREADS
+#if defined(_MSC_VER)
+#define VDP2_TLS __declspec(thread)
+#elif defined(__GNUC__) && !defined(__APPLE__)
+/* static TLS: no call to look it up at each access (the core is a shared */
+/* object), it stays small (a few hundred bytes) to fit when it is loaded */
+#define VDP2_TLS __thread __attribute__((tls_model("initial-exec")))
+#else
+#define VDP2_TLS __thread
+#endif
+#else
+#define VDP2_TLS
+#endif
+
+enum
+{
+	VDP2_RENDER_NORMAL = 0,	/* one pass, caches and screen */
+	VDP2_RENDER_PREPASS,	/* the rotation plane caches only */
+	VDP2_RENDER_BAND		/* the screen only, the caches are up to date */
+};
+static int vdp2_render_mode;
 #define VDP1_LOG 0
 
 #define FRAC_SHIFT 16
@@ -314,8 +343,8 @@ static struct
 static UINT16 sprite_colorbank;
 
 /* VDP1 framebuffer: the priorities used */
-static int vdp1_sprite_priorities_used[8];
-static int vdp1_sprite_priorities_usage_valid;
+static VDP2_TLS int vdp1_sprite_priorities_used[8];
+static VDP2_TLS int vdp1_sprite_priorities_usage_valid;
 static UINT8 vdp1_sprite_priorities_in_fb_line[512][8];
 /* the first and last framebuffer x of the pixels of each priority seen on a line */
 static UINT16 vdp1_sprite_priorities_min_x[512][8], vdp1_sprite_priorities_max_x[512][8];
@@ -379,9 +408,9 @@ struct vdp2_tilemap_capabilities
 	int layer_name; /* just to keep track */
 };
 
-static struct vdp2_tilemap_capabilities current_tilemap;
+static VDP2_TLS struct vdp2_tilemap_capabilities current_tilemap;
 
-static struct
+static VDP2_TLS struct
 {
 	INT32   xst;
 	INT32   yst;
@@ -411,7 +440,7 @@ static struct
 	INT32   dkax;
 } current_rotation_table;
 
-static struct
+static VDP2_TLS struct
 {
 	UINT32  map_offset_min;
 	UINT32  map_offset_max;
@@ -5807,7 +5836,7 @@ static void vdp2_drawgfx_alpha(struct mame_bitmap *dest_bmp,const struct rectang
 }
 
 /* the windows of a line for the current layer settings, refreshed when they change */
-static struct
+static VDP2_TLS struct
 {
 	int gen, y, key;
 	int s0, e0, in0;	/* window 0: x range, line inside */
@@ -7215,6 +7244,10 @@ static void vdp2_check_tilemap(struct mame_bitmap *bitmap, const struct rectangl
 /*  int window_applied = 0; */
 	struct rectangle mycliprect = *cliprect;
 
+	/* the prepass only brings the rotation plane caches up to date */
+	if (vdp2_render_mode == VDP2_RENDER_PREPASS && bitmap != vdp2l.roz_bitmap[0] && bitmap != vdp2l.roz_bitmap[1])
+		return;
+
 /*	if (current_tilemap.vertical_cell_scroll_enable) */
 /*		popmessage("%d %d %d %d", current_tilemap.linescroll_enable, current_tilemap.vertical_linescroll_enable, current_tilemap.linezoom_enable, current_tilemap.vertical_cell_scroll_enable); */
 
@@ -7458,7 +7491,7 @@ static void vdp2_copy_roz_bitmap(struct mame_bitmap *bitmap,
 	/*UINT32 coeff_line_color_screen_data; */
 	INT32 clipxmask = 0, clipymask = 0;
 	int co_r = 0, co_g = 0, co_b = 0;
-	static UINT8 winmask[1024];
+	UINT8 winmask[1024];
 	int use_winmask;
 	/* the plane's pixels without the line table (one dependent load less per pixel) */
 	const UINT32 *rozbase = (const UINT32 *)roz_bitmap->base;
@@ -8468,6 +8501,8 @@ static void vdp2_draw_rotation_screen(struct mame_bitmap *bitmap, const struct r
 /*      current_tilemap.window_control = 0; */
 		fade_control = current_tilemap.fade_control;
 		current_tilemap.fade_control = 0;
+		/* the bands only read the caches the prepass updated */
+		if (vdp2_render_mode != VDP2_RENDER_BAND)
 		{
 			const int same_layer = !(RBG0_cache_data.is_cache_dirty & iRP) &&
 				memcmp(&RBG0_cache_data.layer_data[iRP-1],&current_tilemap,sizeof(current_tilemap)) == 0;
@@ -8586,7 +8621,8 @@ static void vdp2_draw_rotation_screen(struct mame_bitmap *bitmap, const struct r
 
 		current_tilemap.fade_control = fade_control;
 
-		vdp2_copy_roz_bitmap(bitmap, vdp2l.roz_bitmap[iRP-1], cliprect, iRP, planesizex, planesizey, planerenderedsizex, planerenderedsizey );
+		if (vdp2_render_mode != VDP2_RENDER_PREPASS)
+			vdp2_copy_roz_bitmap(bitmap, vdp2l.roz_bitmap[iRP-1], cliprect, iRP, planesizex, planesizey, planerenderedsizex, planerenderedsizey );
 	}
 
 }
@@ -9131,7 +9167,7 @@ static void vdp2_get_window0_coordinates_calc(int *s_x, int *e_x, int *s_y, int 
    screens ask for it on every pixel */
 static INLINE void vdp2_get_window0_coordinates(int *s_x, int *e_x, int *s_y, int *e_y, int y)
 {
-	static int cache_gen = -1, cache_y, c_sx, c_ex, c_sy, c_ey;
+	static VDP2_TLS int cache_gen = -1, cache_y, c_sx, c_ex, c_sy, c_ey;
 	if (cache_gen != vdp2_window_cache_gen || cache_y != y)
 	{
 		vdp2_get_window0_coordinates_calc(&c_sx, &c_ex, &c_sy, &c_ey, y);
@@ -9205,7 +9241,7 @@ static void vdp2_get_window1_coordinates_calc(int *s_x, int *e_x, int *s_y, int 
    screens ask for it on every pixel */
 static INLINE void vdp2_get_window1_coordinates(int *s_x, int *e_x, int *s_y, int *e_y, int y)
 {
-	static int cache_gen = -1, cache_y, c_sx, c_ex, c_sy, c_ey;
+	static VDP2_TLS int cache_gen = -1, cache_y, c_sx, c_ex, c_sy, c_ey;
 	if (cache_gen != vdp2_window_cache_gen || cache_y != y)
 	{
 		vdp2_get_window1_coordinates_calc(&c_sx, &c_ex, &c_sy, &c_ey, y);
@@ -9659,7 +9695,8 @@ static void draw_sprites(struct mame_bitmap *bitmap, const struct rectangle *cli
 	}
 	else
 	{
-		for ( y = cliprect->min_y; y <= cliprect->max_y / (interlace_framebuffer+1); y++ )
+		/* framebuffer line y is drawn on screen lines 2y and 2y + 1 when interlaced */
+		for ( y = cliprect->min_y / (interlace_framebuffer+1); y <= cliprect->max_y / (interlace_framebuffer+1); y++ )
 		{
 			if ( vdp1_sprite_priorities_usage_valid )
 				if (vdp1_sprite_priorities_in_fb_line[y][pri] == 0)
@@ -9875,6 +9912,168 @@ static void draw_sprites(struct mame_bitmap *bitmap, const struct rectangle *cli
 	vdp1_sprite_priorities_usage_valid = 1;
 }
 
+/* the layers and sprites by priority (with the sprites when 'sprites' is set) */
+static void vdp2_render_layers(struct mame_bitmap *bitmap, const struct rectangle *cliprect, int sprites)
+{
+	UINT8 pri;
+
+	vdp1_sprite_priorities_usage_valid = 0;
+	memset(vdp1_sprite_priorities_used, 0, sizeof(vdp1_sprite_priorities_used));
+
+	/*If a plane has a priority value of zero it isn't shown at all.*/
+	for(pri=1;pri<8;pri++)
+	{
+		if(pri==VDP2_N3PRIN) { vdp2_draw_NBG3(bitmap,cliprect); }
+		if(pri==VDP2_N2PRIN) { vdp2_draw_NBG2(bitmap,cliprect); }
+		if(pri==VDP2_N1PRIN) { vdp2_draw_NBG1(bitmap,cliprect); }
+		if(pri==VDP2_N0PRIN) { vdp2_draw_NBG0(bitmap,cliprect); }
+		if(pri==VDP2_R0PRIN) { vdp2_draw_RBG0(bitmap,cliprect); }
+		if (sprites) { draw_sprites(bitmap,cliprect,pri); }
+	}
+}
+
+#ifdef HAVE_THREADS
+#include <rthreads/rthreads.h>
+
+#define VDP2_MAX_THREADS	4
+
+/* the band workers: band 0 is the main thread's, worker i draws band i */
+static struct
+{
+	sthread_t *thread[VDP2_MAX_THREADS];
+	int index[VDP2_MAX_THREADS];
+	slock_t *lock;
+	scond_t *start, *done;
+	int workers;		/* threads started */
+	int gen;			/* job number */
+	int bands;			/* bands of the job */
+	int pending;		/* worker bands not drawn yet */
+	int quit;
+	struct mame_bitmap *bitmap;
+	struct rectangle band[VDP2_MAX_THREADS];
+} vdp2_mt;
+
+/*
+	Thread i draws the strips i, i + n, i + 2n... of VDP2_STRIP lines:
+	the layers are not spread evenly over the screen (a field at the
+	bottom, a sky at the top), strips keep the threads equally busy.
+*/
+#define VDP2_STRIP	16
+
+static void vdp2_render_band(struct mame_bitmap *bitmap, const struct rectangle *screen, int i, int n)
+{
+	int y;
+	for (y = screen->min_y + i * VDP2_STRIP; y <= screen->max_y; y += n * VDP2_STRIP)
+	{
+		struct rectangle strip = *screen;
+		strip.min_y = y;
+		strip.max_y = y + VDP2_STRIP - 1;
+		if (strip.max_y > screen->max_y)
+			strip.max_y = screen->max_y;
+		vdp2_render_layers(bitmap, &strip, 1);
+	}
+}
+
+static void vdp2_band_worker(void *arg)
+{
+	const int i = *(const int *)arg;
+	int seen = 0;
+
+	slock_lock(vdp2_mt.lock);
+	for (;;)
+	{
+		while (vdp2_mt.gen == seen && !vdp2_mt.quit)
+			scond_wait(vdp2_mt.start, vdp2_mt.lock);
+		if (vdp2_mt.quit)
+			break;
+		seen = vdp2_mt.gen;
+		if (i < vdp2_mt.bands)
+		{
+			struct rectangle screen = vdp2_mt.band[0];
+			struct mame_bitmap *bitmap = vdp2_mt.bitmap;
+			int bands = vdp2_mt.bands;
+			slock_unlock(vdp2_mt.lock);
+			vdp2_render_band(bitmap, &screen, i, bands);
+			slock_lock(vdp2_mt.lock);
+			if (--vdp2_mt.pending == 0)
+				scond_signal(vdp2_mt.done);
+		}
+	}
+	slock_unlock(vdp2_mt.lock);
+}
+
+static void vdp2_threads_stop(void)
+{
+	int i;
+	if (!vdp2_mt.lock)
+		return;
+	slock_lock(vdp2_mt.lock);
+	vdp2_mt.quit = 1;
+	scond_broadcast(vdp2_mt.start);
+	slock_unlock(vdp2_mt.lock);
+	for (i = 1; i < vdp2_mt.workers + 1; i++)
+		sthread_join(vdp2_mt.thread[i]);
+	scond_free(vdp2_mt.start);
+	scond_free(vdp2_mt.done);
+	slock_free(vdp2_mt.lock);
+	memset(&vdp2_mt, 0, sizeof(vdp2_mt));
+}
+
+/* the screen in bands, 0 if the threads are not there (then the caller draws it alone) */
+static int vdp2_render_threaded(struct mame_bitmap *bitmap, const struct rectangle *cliprect)
+{
+	int bands = options.stv_video_threads, i;
+
+	if (bands > VDP2_MAX_THREADS)
+		bands = VDP2_MAX_THREADS;
+	if (!vdp2_mt.lock)
+	{
+		vdp2_mt.lock = slock_new();
+		vdp2_mt.start = scond_new();
+		vdp2_mt.done = scond_new();
+		if (!vdp2_mt.lock || !vdp2_mt.start || !vdp2_mt.done)
+			return 0;
+	}
+	while (vdp2_mt.workers < bands - 1)
+	{
+		i = vdp2_mt.workers + 1;
+		vdp2_mt.index[i] = i;
+		vdp2_mt.thread[i] = sthread_create(vdp2_band_worker, &vdp2_mt.index[i]);
+		if (!vdp2_mt.thread[i])
+			break;
+		vdp2_mt.workers++;
+	}
+	if (bands > vdp2_mt.workers + 1)
+		bands = vdp2_mt.workers + 1;
+	if (bands < 2)
+		return 0;
+
+	/* the rotation plane caches first, alone */
+	vdp2_render_mode = VDP2_RENDER_PREPASS;
+	vdp2_render_layers(bitmap, cliprect, 0);
+
+	/* then the bands */
+	vdp2_render_mode = VDP2_RENDER_BAND;
+	vdp2_mt.band[0] = *cliprect;
+	slock_lock(vdp2_mt.lock);
+	vdp2_mt.bitmap = bitmap;
+	vdp2_mt.bands = bands;
+	vdp2_mt.pending = bands - 1;
+	vdp2_mt.gen++;
+	scond_broadcast(vdp2_mt.start);
+	slock_unlock(vdp2_mt.lock);
+
+	vdp2_render_band(bitmap, cliprect, 0, bands);
+
+	slock_lock(vdp2_mt.lock);
+	while (vdp2_mt.pending)
+		scond_wait(vdp2_mt.done, vdp2_mt.lock);
+	slock_unlock(vdp2_mt.lock);
+	vdp2_render_mode = VDP2_RENDER_NORMAL;
+	return 1;
+}
+#endif
+
 /* the VDP2 screen, drawn at the end of the active display as MAME does */
 static void vdp2_render(struct mame_bitmap *bitmap, const struct rectangle *cliprect)
 {
@@ -9885,24 +10084,17 @@ static void vdp2_render(struct mame_bitmap *bitmap, const struct rectangle *clip
 
 	if(get_disp())
 	{
-		UINT8 pri;
-
-		vdp1_sprite_priorities_usage_valid = 0;
-		memset(vdp1_sprite_priorities_used, 0, sizeof(vdp1_sprite_priorities_used));
 		memset(vdp1_sprite_priorities_in_fb_line, 0, sizeof(vdp1_sprite_priorities_in_fb_line));
 		memset(vdp1_sprite_priorities_min_x, 0xff, sizeof(vdp1_sprite_priorities_min_x));
 		memset(vdp1_sprite_priorities_max_x, 0, sizeof(vdp1_sprite_priorities_max_x));
 
-		/*If a plane has a priority value of zero it isn't shown at all.*/
-		for(pri=1;pri<8;pri++)
-		{
-			if(pri==VDP2_N3PRIN) { vdp2_draw_NBG3(bitmap,cliprect); }
-			if(pri==VDP2_N2PRIN) { vdp2_draw_NBG2(bitmap,cliprect); }
-			if(pri==VDP2_N1PRIN) { vdp2_draw_NBG1(bitmap,cliprect); }
-			if(pri==VDP2_N0PRIN) { vdp2_draw_NBG0(bitmap,cliprect); }
-			if(pri==VDP2_R0PRIN) { vdp2_draw_RBG0(bitmap,cliprect); }
-			{ draw_sprites(bitmap,cliprect,pri); }
-		}
+#ifdef HAVE_THREADS
+		/* strips of lines (of an even number of lines from an even one: an interlaced framebuffer line is two) */
+		if (options.stv_video_threads > 1 && !(cliprect->min_y & 1) && cliprect->max_y - cliprect->min_y >= 64 &&
+			vdp2_render_threaded(bitmap, cliprect))
+			return;
+#endif
+		vdp2_render_layers(bitmap, cliprect, 1);
 	}
 }
 
@@ -10308,6 +10500,9 @@ VIDEO_START( stv_vdp2 )
 VIDEO_STOP( stv_vdp2 )
 {
 	int i;
+#ifdef HAVE_THREADS
+	vdp2_threads_stop();
+#endif
 	for (i = 0; i < 2; i++)
 		if (vdp2l.roz_bitmap[i])
 		{

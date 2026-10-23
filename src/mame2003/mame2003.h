@@ -233,6 +233,7 @@ enum CORE_OPTIONS  /* controls the order in which core options appear. common, i
   OPT_MIPS_DYNAREC,
   OPT_ADSP_DYNAREC,
   OPT_SH2_DYNAREC,
+  OPT_STV_VIDEO_THREADS,
 #if (HAS_CYCLONE || HAS_DRZ80)
   OPT_CYCLONE_MODE,
 #endif

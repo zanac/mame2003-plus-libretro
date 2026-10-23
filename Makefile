@@ -102,6 +102,8 @@ ifeq ($(platform), unix)
 	fpic = -fPIC
 	CFLAGS += $(fpic)
 	LDFLAGS += $(fpic) -shared -Wl,--version-script=link.T
+	HAVE_THREADS = 1
+	LIBS += -lpthread
 
 # Linux Portable
 else ifeq ($(platform), linux-portable)
