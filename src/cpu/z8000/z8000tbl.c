@@ -539,6 +539,22 @@ void z8000_init(void)
 {
     int i;
 	Z8000_init *init;
+	int cpu = cpu_getactivecpu();
+
+	/* save states: the registers and the interrupt state, for each CPU */
+	state_save_register_UINT16("z8000", cpu, "op",        Z.op, 4);
+	state_save_register_UINT16("z8000", cpu, "PPC",       &Z.ppc, 1);
+	state_save_register_UINT16("z8000", cpu, "PC",        &Z.pc, 1);
+	state_save_register_UINT16("z8000", cpu, "PSAP",      &Z.psap, 1);
+	state_save_register_UINT16("z8000", cpu, "FCW",       &Z.fcw, 1);
+	state_save_register_UINT16("z8000", cpu, "refresh",   &Z.refresh, 1);
+	state_save_register_UINT16("z8000", cpu, "NSP",       &Z.nsp, 1);
+	state_save_register_UINT16("z8000", cpu, "IRQ req",   &Z.irq_req, 1);
+	state_save_register_UINT16("z8000", cpu, "IRQ srv",   &Z.irq_srv, 1);
+	state_save_register_UINT16("z8000", cpu, "IRQ vec",   &Z.irq_vec, 1);
+	state_save_register_UINT16("z8000", cpu, "regs",      Z.regs.W, 16);
+	state_save_register_INT32 ("z8000", cpu, "NMI state", &Z.nmi_state, 1);
+	state_save_register_INT32 ("z8000", cpu, "IRQ state", Z.irq_state, 2);
 
 	/* already initialized? */
 	if( z8000_exec )

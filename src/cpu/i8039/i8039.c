@@ -583,6 +583,8 @@ void i8039_init (void)
 	state_save_register_UINT16("i8039", cpu, "A11 FF", &R.A11ff, 1);
 	state_save_register_UINT8("i8039", cpu, "IRQ State", &R.irq_state, 1);
 	state_save_register_UINT8("i8039", cpu, "IRQ extra cycles", &R.irq_extra_cycles, 1);
+	/* the last T1 level of the counter, shared by all the i8039 CPUs */
+	state_save_register_UINT8("i8039", cpu, "Old T1", &Old_T1, 1);
 }
 
 /****************************************************************************
@@ -951,7 +953,7 @@ static UINT8 i8035_win_layout[] = {
 	 0,23,80, 1,	/* command line window (bottom rows) */
 };
 
-void i8035_init(void) { }
+void i8035_init(void) { i8039_init(); }
 void i8035_reset(void *param) { i8039_reset(param); }
 void i8035_exit(void) { i8039_exit(); }
 int i8035_execute(int cycles) { return i8039_execute(cycles); }
@@ -1004,7 +1006,7 @@ static UINT8 i8048_win_layout[] = {
 	 0,23,80, 1,	/* command line window (bottom rows) */
 };
 
-void i8048_init(void) { }
+void i8048_init(void) { i8039_init(); }
 void i8048_reset(void *param) { i8039_reset(param); }
 void i8048_exit(void) { i8039_exit(); }
 int i8048_execute(int cycles) { return i8039_execute(cycles); }
@@ -1055,7 +1057,7 @@ static UINT8 n7751_win_layout[] = {
 	 0,23,80, 1,	/* command line window (bottom rows) */
 };
 
-void n7751_init(void) { }
+void n7751_init(void) { i8039_init(); }
 void n7751_reset(void *param) { i8039_reset(param); }
 void n7751_exit(void) { i8039_exit(); }
 int n7751_execute(int cycles) { return i8039_execute(cycles); }

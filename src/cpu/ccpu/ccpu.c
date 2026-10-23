@@ -6,6 +6,7 @@ architecture.  Really, it's not so bad!
 **********************************************************/
 
 #include "driver.h"
+#include "state.h"
 #include "mamedbg.h"
 #include "ccpu.h"
 
@@ -71,8 +72,11 @@ extern UINT16 ioSwitches;
 extern UINT16 ioInputs;
 
 
+static void ccpu_save_init(void);
+
 void ccpu_init(void)
 {
+	ccpu_save_init();
 }
 
 void ccpu_reset(void *param)
@@ -504,6 +508,41 @@ extern int sdwYOffset;
 
 
 /* functions */
+
+/* save states: the C-CPU context above (the core keeps it in statics) */
+static INT32 ccpu_saved_state;
+
+static void ccpu_presave(void)
+{
+	ccpu_saved_state = (INT32)state;
+}
+
+static void ccpu_postload(void)
+{
+	state = (CINESTATE)ccpu_saved_state;
+}
+
+static void ccpu_save_init(void)
+{
+	state_save_register_UINT16("ccpu", 0, "PC",    &register_PC, 1);
+	state_save_register_UINT16("ccpu", 0, "A",     &register_A, 1);
+	state_save_register_UINT16("ccpu", 0, "B",     &register_B, 1);
+	state_save_register_UINT8 ("ccpu", 0, "I",     &register_I, 1);
+	state_save_register_UINT16("ccpu", 0, "J",     &register_J, 1);
+	state_save_register_UINT8 ("ccpu", 0, "P",     &register_P, 1);
+	state_save_register_UINT16("ccpu", 0, "FromX", &FromX, 1);
+	state_save_register_UINT16("ccpu", 0, "FromY", &FromY, 1);
+	state_save_register_UINT16("ccpu", 0, "T",     &register_T, 1);
+	state_save_register_UINT16("ccpu", 0, "C",     &flag_C, 1);
+	state_save_register_UINT16("ccpu", 0, "cmp_old", &cmp_old, 1);
+	state_save_register_UINT16("ccpu", 0, "cmp_new", &cmp_new, 1);
+	state_save_register_UINT8 ("ccpu", 0, "acc_a0", &acc_a0, 1);
+	state_save_register_INT32 ("ccpu", 0, "state", &ccpu_saved_state, 1);
+	state_save_register_UINT8 ("ccpu", 0, "vgShiftLength", &vgShiftLength, 1);
+	state_save_register_UINT16("ccpu", 0, "vgColour", &vgColour, 1);
+	state_save_register_func_presave(ccpu_presave);
+	state_save_register_func_postload(ccpu_postload);
+}
 
 #include "ccputabl.c"
 

@@ -17,6 +17,7 @@
 #include "cpuintrf.h"
 #include "mamedbg.h"
 #include "t11.h"
+#include "state.h"
 
 
 
@@ -407,8 +408,46 @@ void t11_set_reg(int regnum, unsigned val)
  *
  *************************************/
 
+/* save states: the bank pointers are saved as offsets in the opcode base */
+static UINT32 t11_bank_offset[8];
+
+static void t11_presave(void)
+{
+	int i;
+
+	for (i = 0; i < 8; i++)
+		t11_bank_offset[i] = (UINT32)(t11.bank[i] - OP_RAM);
+}
+
+static void t11_postload(void)
+{
+	int i;
+
+	for (i = 0; i < 8; i++)
+		t11.bank[i] = &OP_RAM[t11_bank_offset[i]];
+}
+
 void t11_init(void)
 {
+	int cpu = cpu_getactivecpu();
+
+	state_save_register_UINT32("t11", cpu, "PPC",        &t11.ppc.d, 1);
+	state_save_register_UINT32("t11", cpu, "R0",         &t11.reg[0].d, 1);
+	state_save_register_UINT32("t11", cpu, "R1",         &t11.reg[1].d, 1);
+	state_save_register_UINT32("t11", cpu, "R2",         &t11.reg[2].d, 1);
+	state_save_register_UINT32("t11", cpu, "R3",         &t11.reg[3].d, 1);
+	state_save_register_UINT32("t11", cpu, "R4",         &t11.reg[4].d, 1);
+	state_save_register_UINT32("t11", cpu, "R5",         &t11.reg[5].d, 1);
+	state_save_register_UINT32("t11", cpu, "SP",         &t11.reg[6].d, 1);
+	state_save_register_UINT32("t11", cpu, "PC",         &t11.reg[7].d, 1);
+	state_save_register_UINT32("t11", cpu, "PSW",        &t11.psw.d, 1);
+	state_save_register_UINT16("t11", cpu, "op",         &t11.op, 1);
+	state_save_register_UINT8 ("t11", cpu, "wait state", &t11.wait_state, 1);
+	state_save_register_UINT8 ("t11", cpu, "IRQ state",  &t11.irq_state, 1);
+	state_save_register_INT32 ("t11", cpu, "interrupt cycles", &t11.interrupt_cycles, 1);
+	state_save_register_UINT32("t11", cpu, "banks",      t11_bank_offset, 8);
+	state_save_register_func_presave(t11_presave);
+	state_save_register_func_postload(t11_postload);
 }
 
 

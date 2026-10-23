@@ -747,6 +747,22 @@ static void BRA_EA(void) _BRA_EA()
 
 void s2650_init(void)
 {
+	int cpu = cpu_getactivecpu();
+
+	/* save states: the registers, the return address stack and the halt
+	   and interrupt states */
+	state_save_register_UINT16("s2650", cpu, "PPC",  &S.ppc, 1);
+	state_save_register_UINT16("s2650", cpu, "page", &S.page, 1);
+	state_save_register_UINT16("s2650", cpu, "IAR",  &S.iar, 1);
+	state_save_register_UINT16("s2650", cpu, "EA",   &S.ea, 1);
+	state_save_register_UINT8 ("s2650", cpu, "PSL",  &S.psl, 1);
+	state_save_register_UINT8 ("s2650", cpu, "PSU",  &S.psu, 1);
+	state_save_register_UINT8 ("s2650", cpu, "R",    &S.r, 1);
+	state_save_register_UINT8 ("s2650", cpu, "reg",  S.reg, 7);
+	state_save_register_UINT8 ("s2650", cpu, "halt", &S.halt, 1);
+	state_save_register_UINT8 ("s2650", cpu, "IR",   &S.ir, 1);
+	state_save_register_UINT16("s2650", cpu, "RAS",  S.ras, 8);
+	state_save_register_UINT8 ("s2650", cpu, "IRQ state", &S.irq_state, 1);
 }
 
 void s2650_reset(void *param)

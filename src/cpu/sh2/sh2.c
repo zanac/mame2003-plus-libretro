@@ -3136,5 +3136,30 @@ void sh2_init(void)
 	state_save_register_UINT32("sh2", cpu, "R13", &sh2.r[13], 1);
 	state_save_register_UINT32("sh2", cpu, "R14", &sh2.r[14], 1);
 	state_save_register_UINT32("sh2", cpu, "EA", &sh2.ea, 1);
+	/* the rest of the CPU state: the delay slot, the divider unit, the
+	   interrupts, the free running timer, the DMA and the on-chip registers */
+	state_save_register_UINT32("sh2", cpu, "PPC",        &sh2.ppc, 1);
+	state_save_register_UINT32("sh2", cpu, "delay",      &sh2.delay, 1);
+	state_save_register_UINT32("sh2", cpu, "cpu_off",    &sh2.cpu_off, 1);
+	state_save_register_UINT32("sh2", cpu, "DVSR",       &sh2.dvsr, 1);
+	state_save_register_UINT32("sh2", cpu, "DVDNTH",     &sh2.dvdnth, 1);
+	state_save_register_UINT32("sh2", cpu, "DVDNTL",     &sh2.dvdntl, 1);
+	state_save_register_UINT32("sh2", cpu, "DVCR",       &sh2.dvcr, 1);
+	state_save_register_UINT32("sh2", cpu, "pending_irq", &sh2.pending_irq, 1);
+	state_save_register_UINT32("sh2", cpu, "test_irq",   &sh2.test_irq, 1);
+	state_save_register_INT32 ("sh2", cpu, "irq_queue",  (INT32 *)sh2.irq_queue, 16*2);
+	state_save_register_INT8  ("sh2", cpu, "irq_line_state", sh2.irq_line_state, 16);
+	state_save_register_INT8  ("sh2", cpu, "nmi_line_state", &sh2.nmi_line_state, 1);
+	state_save_register_UINT16("sh2", cpu, "FRC",        &sh2.frc, 1);
+	state_save_register_UINT16("sh2", cpu, "OCRA",       &sh2.ocra, 1);
+	state_save_register_UINT16("sh2", cpu, "OCRB",       &sh2.ocrb, 1);
+	state_save_register_UINT16("sh2", cpu, "ICR",        &sh2.icr, 1);
+	state_save_register_UINT32("sh2", cpu, "frc_base",   &sh2.frc_base, 1);
+	state_save_register_int   ("sh2", cpu, "frt_input",  &sh2.frt_input);
+	state_save_register_int   ("sh2", cpu, "internal_irq_level",  &sh2.internal_irq_level);
+	state_save_register_int   ("sh2", cpu, "internal_irq_vector", &sh2.internal_irq_vector);
+	state_save_register_INT32 ("sh2", cpu, "dma_timer_active", sh2.dma_timer_active, 2);
+	if (sh2.m)
+		state_save_register_UINT32("sh2", cpu, "on-chip registers", sh2.m, 0x200/4);
 	return;
 }

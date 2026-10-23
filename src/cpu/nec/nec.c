@@ -1087,6 +1087,9 @@ static void nec_init(int type)
 	state_save_register_UINT32(names[type], cpu, "ZV", &I.ZeroVal, 1);
 	state_save_register_UINT32(names[type], cpu, "CV", &I.CarryVal, 1);
 	state_save_register_UINT32(names[type], cpu, "PV", &I.ParityVal, 1);
+	/* no_interrupt is shared by all the NEC CPUs and lasts from one
+	   instruction to the next, so save it with each of them */
+	state_save_register_int(names[type], cpu, "no_interrupt", &no_interrupt);
 }
 
 /* Wrappers for the different CPU types */

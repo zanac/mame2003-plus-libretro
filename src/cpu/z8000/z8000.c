@@ -22,6 +22,7 @@
  *****************************************************************************/
 
 #include "driver.h"
+#include "state.h"
 #include "mamedbg.h"
 #include "z8000.h"
 #include "z8000cpu.h"
