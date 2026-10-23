@@ -153,7 +153,17 @@ typedef struct
 } SH2;
 
 int sh2_icount;
-static SH2 sh2;
+
+/*
+	The state of the active SH-2 is its own context buffer: switching
+	CPUs (every timeslice, many thousand times a frame on the ST-V with
+	its tight interleave) only moves this pointer instead of copying
+	the whole state out and in. Each CPU's saved state items point into
+	its buffer too, so a state save reads it whether it is active or not.
+*/
+static SH2 sh2_boot;			/* before a CPU's buffer is known */
+static SH2 *sh2p = &sh2_boot;
+#define sh2 (*sh2p)
 
 /* Atrocious hack that makes the soldivid music correct*/
 
@@ -2417,6 +2427,8 @@ void sh2_exit(void)
 	if (sh2.m)
 		free(sh2.m);
 	sh2.m = NULL;
+	/* the core frees the buffers after this */
+	sh2p = &sh2_boot;
 }
 
 
@@ -2442,16 +2454,17 @@ int sh2_execute(int cycles)
 /* Get registers, return context size */
 unsigned sh2_get_context(void *dst)
 {
-	if( dst )
-		memcpy(dst, &sh2, sizeof(SH2));
+	if( dst && dst != (void *)sh2p )
+		memcpy(dst, sh2p, sizeof(SH2));
 	return sizeof(SH2);
 }
 
 /* Set registers */
 void sh2_set_context(void *src)
 {
+	/* the core passes a CPU's own buffer: it becomes the live state */
 	if( src )
-		memcpy(&sh2, src, sizeof(SH2));
+		sh2p = (SH2 *)src;
 }
 
 static void sh2_timer_resync(void)
@@ -3135,6 +3148,12 @@ unsigned sh2_dasm(char *buffer, unsigned pc)
 void sh2_init(void)
 {
 	int cpu = cpu_getactivecpu();
+
+	/* this CPU's buffer from now on (the core allocated it before the init) */
+	sh2p = (SH2 *)cpunum_get_context_ptr(cpu);
+	if (!sh2p)
+		sh2p = &sh2_boot;
+	memset(sh2p, 0, sizeof(SH2));
 
 	sh2.timer = timer_alloc(sh2_timer_callback);
 	timer_adjust(sh2.timer, TIME_NEVER, 0, 0);

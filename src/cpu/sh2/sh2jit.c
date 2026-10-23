@@ -83,6 +83,7 @@ struct jit_block
 	UINT16		cost;				/* most cycles the block can take, 0 = not translatable */
 	UINT8		valid;
 	UINT8		len;				/* instructions */
+	UINT8		idle;				/* the SGL idle counting loop starts here (see jit_idle_skip) */
 	UINT16		op0;				/* first opcode, to retry an untranslatable block once it changes */
 };
 
@@ -1813,6 +1814,83 @@ static int jit_slot_ok(UINT16 op, UINT16 slot)
 	return 1;
 }
 
+/*
+	The idle loop of Sega's SGL library (vfremix, twcup98 and others),
+	where a CPU waits for a flag set by an interrupt, counting the
+	iterations in or out of vblank:
+
+	loop:	MOV.W	@R7,R2		; VDP2 TVSTAT
+		EXTU.W	R2,R2
+		AND	R1,R2			; R1 = 8: the vblank bit
+		TST	R2,R2
+		BT	out			; not in vblank
+		MOV.L	@R5,R3			; ++*R5
+		ADD	#1,R3
+		MOV.L	R3,@R5
+		BRA	next
+		NOP
+	out:	MOV.L	@R4,R2			; ++*R4
+		ADD	#1,R2
+		MOV.L	R2,@R4
+	next:	MOV.L	@R6,R0
+		CMP/EQ	#1,R0
+		BT	loop			; while *R6 == 1
+
+	Within a timeslice nothing can change *R6 (the other CPU and the
+	interrupts run between timeslices) nor the vblank bit (the line
+	counter changes between timeslices too), so every iteration takes
+	the same path: 15 cycles out of vblank, 16 in. The whole iterations
+	the timeslice has room for are done at once, leaving one and the
+	rest to the code; registers and flags are those every iteration
+	sets again.
+*/
+#define JIT_IDLE_LEN	16
+static const UINT16 jit_idle_ops[JIT_IDLE_LEN] =
+{
+	0x6271, 0x622d, 0x2219, 0x2228, 0x8904, 0x6352, 0x7301, 0x2532,
+	0xa003, 0x0009, 0x6242, 0x7201, 0x2422, 0x6062, 0x8801, 0x89ef
+};
+
+/* the host word of the RAM long at 'address', or NULL if it is not plain RAM of this CPU */
+static INLINE UINT32 *jit_idle_ram(UINT32 address)
+{
+	UINT8 *page;
+	if ((address & 3) || (address & 0xc0000000))
+		return NULL;
+	page = sh2.jit_wpage[(address & AM) >> JIT_PAGE_SHIFT];
+	return page ? (UINT32 *)(page + (address & ((1 << JIT_PAGE_SHIFT) - 1))) : NULL;
+}
+
+static void jit_idle_skip(void)
+{
+	UINT32 *flag, *count;
+	int cost, k;
+
+	if (sh2.delay || sh2.test_irq || !sh2.jit_wpage || ((sh2.r[7] & AM) != 0x05f80004))
+		return;
+	flag = jit_idle_ram(sh2.r[6]);
+	if (!flag || *flag != 1)
+		return;
+	if (((UINT16)RW(sh2.r[7]) & sh2.r[1]) == 0)
+	{
+		count = jit_idle_ram(sh2.r[4]);
+		cost = 15;
+	}
+	else
+	{
+		count = jit_idle_ram(sh2.r[5]);
+		cost = 16;
+	}
+	if (!count || count == flag)
+		return;
+	/* leave a whole iteration and the part of one that ends the timeslice to the code */
+	k = (sh2_icount - 1) / cost - 1;
+	if (k <= 0)
+		return;
+	*count += k;
+	sh2_icount -= k * cost;
+}
+
 static void jit_compile(struct jit_block *block, UINT32 pc)
 {
 	static struct jit_ctx ctx;
@@ -1830,6 +1908,7 @@ static void jit_compile(struct jit_block *block, UINT32 pc)
 	block->valid = 1;
 	block->code = NULL;
 	block->entry = NULL;
+	block->idle = 0;
 	block->op0 = jit_fetch(pc);
 
 	/* code must sit in one fast RAM region, below the special areas */
@@ -1845,6 +1924,9 @@ static void jit_compile(struct jit_block *block, UINT32 pc)
 		ops[i] = jit_fetch(pc + i * 2);
 
 	ops[maxcount] = (maxcount < (ram->end - (pc & AM) + 1) / 2) ? jit_fetch(pc + maxcount * 2) : 0;
+
+	if (maxcount >= JIT_IDLE_LEN && memcmp(ops, jit_idle_ops, sizeof(jit_idle_ops)) == 0)
+		block->idle = 1;
 
 	/* walk the straight path: conditional branches fall through, jumps end the block */
 	while (count < maxcount && !ends)
@@ -1889,7 +1971,8 @@ static void jit_compile(struct jit_block *block, UINT32 pc)
 #else
 	sljit_emit_enter(C, 0, SLJIT_ARGS0(32), 4, 3, 0);
 #endif
-	sljit_emit_op1(C, SLJIT_MOV_P, SLJIT_S0, 0, SLJIT_IMM, (sljit_sw)&sh2);
+	/* the active SH-2's state (its context buffer, see sh2p) */
+	sljit_emit_op1(C, SLJIT_MOV_P, SLJIT_S0, 0, SLJIT_MEM0(), (sljit_sw)&sh2p);
 	entry = sljit_emit_label(C);
 
 	for (i = 0; i < count; i++)
@@ -1935,7 +2018,8 @@ static void jit_compile(struct jit_block *block, UINT32 pc)
 	if (block->code)
 	{
 		sljit_uw n_entry = sljit_get_label_addr(entry);
-		block->entry = (void *)n_entry;
+		/* the idle loop goes through the dispatcher, where it is skipped */
+		block->entry = block->idle ? NULL : (void *)n_entry;
 		jit_code_bytes += sljit_get_generated_code_size(C);
 	}
 	sljit_free_compiler(C);
@@ -1992,7 +2076,7 @@ static INLINE int sh2_jit_run(void)
 			sljit_free_code(block->code, NULL);
 		jit_compile(block, sh2.pc);
 	}
-	if (!block->cost || block->cost > sh2_icount)
+	if (!block->cost)
 		return 0;
 	if (!sh2.jit_rpage)
 	{
@@ -2003,6 +2087,10 @@ static INLINE int sh2_jit_run(void)
 		sh2.jit_wpage = jit_wpage[cpu];
 	}
 	before = sh2_icount;
+	if (block->idle)
+		jit_idle_skip();
+	if (block->cost > sh2_icount)
+		return sh2_icount != before;	/* the iterations skipped, if any: the rest steps */
 #ifdef SH2JIT_VERIFY
 	sh2.pc = jit_verify_block(block);
 #else
