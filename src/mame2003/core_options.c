@@ -1479,9 +1479,12 @@ void set_content_flags(void)
       options.content_flags[CONTENT_SH2_DYNAREC] = true;
   }
 #endif
-#if (HAS_SH2) && defined(HAVE_THREADS)
-  if (game_driver->source_file && strstr(game_driver->source_file, "stv.c"))
-    options.content_flags[CONTENT_STV_VIDEO_THREADS] = true;
+#if (HAS_SH2)
+  {
+    extern int stv_video_threads_available(void);
+    if (game_driver->source_file && strstr(game_driver->source_file, "stv.c") && stv_video_threads_available())
+      options.content_flags[CONTENT_STV_VIDEO_THREADS] = true;
+  }
 #endif
 
   /************ DRIVERS WITH MULTIPLE BIOS OPTIONS ************/

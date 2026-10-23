@@ -102,8 +102,6 @@ ifeq ($(platform), unix)
 	fpic = -fPIC
 	CFLAGS += $(fpic)
 	LDFLAGS += $(fpic) -shared -Wl,--version-script=link.T
-	HAVE_THREADS = 1
-	LIBS += -lpthread
 
 # Linux Portable
 else ifeq ($(platform), linux-portable)
@@ -864,6 +862,20 @@ endif
 
 ifeq ($(HAVE_ARMv6),1)
 	CFLAGS += -DHAVE_ARMv6
+endif
+
+# threads (libretro-common rthreads), as the other libretro cores do (beetle-psx):
+# on by default, off where there is no thread library or no thread-local storage
+# in a loaded module (Windows XP for the old MSVC builds)
+HAVE_THREADS ?= 1
+ifneq (,$(filter $(platform), emscripten linux-portable ngc wii wiiu ps2 ps3 psl1ght psp1 ctr vita xbox1_msvc2003 xbox360_msvc2010 windows_msvc2003_x86 windows_msvc2005_x86))
+	HAVE_THREADS = 0
+endif
+ifeq ($(HAVE_THREADS),1)
+	# pthreads are in the C library on Darwin and Android, Windows uses its own threads
+	ifeq (,$(findstring msvc,$(platform))$(findstring android,$(platform))$(findstring ios,$(platform))$(findstring tvos,$(platform))$(filter osx win,$(platform)))
+		LIBS += -lpthread
+	endif
 endif
 
 # include the various .mak files

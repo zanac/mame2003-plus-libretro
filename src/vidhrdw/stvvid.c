@@ -118,7 +118,26 @@ static void log_masked(int mask, const char *fmt, ...) { (void)mask; (void)fmt; 
 	read while the bands are drawn: the rotation plane caches are brought
 	up to date before, by the main thread alone (VDP2_RENDER_PREPASS).
 */
-#ifdef HAVE_THREADS
+/*
+	As libretro-common (formats/data_transfer.c): no threaded video where
+	there is no native thread-local storage (clang's __has_feature(tls):
+	old Darwin deployment targets) or where GCC emulates it with a lookup
+	per access (the consoles, and MinGW's GCC). Nor with MSVC before 2015,
+	whose builds may run on Windows XP, where __declspec(thread) does not
+	work in a DLL loaded at run time. The state is thread local even with
+	the option off, so an emulated TLS would slow every game down.
+*/
+#if defined(HAVE_THREADS) && !defined(VITA) && !defined(PSP) && !defined(_3DS) && !defined(GEKKO) && \
+	!(defined(__MINGW32__) && !defined(__clang__)) && !(defined(_MSC_VER) && _MSC_VER < 1900)
+#define STV_VIDEO_THREADS 1
+#if defined(__has_feature)
+#if !__has_feature(tls)
+#undef STV_VIDEO_THREADS
+#endif
+#endif
+#endif
+
+#ifdef STV_VIDEO_THREADS
 #if defined(_MSC_VER)
 #define VDP2_TLS __declspec(thread)
 #elif defined(__GNUC__) && !defined(__APPLE__)
@@ -131,6 +150,16 @@ static void log_masked(int mask, const char *fmt, ...) { (void)mask; (void)fmt; 
 #else
 #define VDP2_TLS
 #endif
+
+/* for the core options: is the "ST-V Threaded Video" option of any use here */
+int stv_video_threads_available(void)
+{
+#ifdef STV_VIDEO_THREADS
+	return 1;
+#else
+	return 0;
+#endif
+}
 
 enum
 {
@@ -233,14 +262,39 @@ static void gfx_decode_element(struct stv_gfx *g, int code)
 			}
 			*dst++ = pix;
 		}
-	g->dirty[code] = 0;
 }
+
+#ifdef STV_VIDEO_THREADS
+/*
+	While the strips are drawn, a thread that finds an element stale
+	decodes it itself and leaves it marked stale: another thread that
+	reads it decodes it too, writing the same bytes, so no thread reads
+	an element another one is writing. The elements decoded are noted
+	per thread and marked clean once all the strips are drawn.
+*/
+#define VDP2_DECODED_MAX	16384
+static VDP2_TLS int vdp2_band_index = -1;
+static UINT32 *vdp2_band_decoded[4];
+static int vdp2_band_decoded_count[4];
+#endif
 
 static INLINE const UINT8 *gfx_get_data(struct stv_gfx *g, int code)
 {
 	code %= g->elements;
 	if (g->dirty[code])
+	{
 		gfx_decode_element(g, code);
+#ifdef STV_VIDEO_THREADS
+		if (vdp2_band_index >= 0)
+		{
+			int b = vdp2_band_index;
+			if (vdp2_band_decoded[b] && vdp2_band_decoded_count[b] < VDP2_DECODED_MAX)
+				vdp2_band_decoded[b][vdp2_band_decoded_count[b]++] = ((UINT32)(g - stv_gfx) << 24) | (UINT32)code;
+		}
+		else
+#endif
+			g->dirty[code] = 0;
+	}
 	return g->cache + code * g->width * g->height;
 }
 
@@ -670,8 +724,6 @@ static void vdp2_draw_line(struct mame_bitmap *bitmap, const struct rectangle *c
 static void vdp2_draw_mosaic(struct mame_bitmap *bitmap, const struct rectangle *cliprect, UINT8 is_roz);
 static void vdp2_check_tilemap(struct mame_bitmap *bitmap, const struct rectangle *cliprect);
 static void vdp2_copy_roz_bitmap(struct mame_bitmap *bitmap, struct mame_bitmap *roz_bitmap, const struct rectangle *cliprect, int iRP, int planesizex, int planesizey, int planerenderedsizex, int planerenderedsizey);
-static INLINE int vdp2_roz_window(int x, int y);
-static INLINE int vdp2_roz_mode3_window(int x, int y, int rot_parameter);
 static INLINE int get_roz_window_pixel(int s_x,int e_x,int s_y,int e_y,int x, int y,UINT8 winenable, UINT8 winarea);
 static void vdp2_draw_NBG0(struct mame_bitmap *bitmap, const struct rectangle *cliprect);
 static void vdp2_draw_NBG1(struct mame_bitmap *bitmap, const struct rectangle *cliprect);
@@ -7077,8 +7129,9 @@ static void vdp2_check_tilemap_with_linescroll(struct mame_bitmap *bitmap, const
 	}
 	if ( linezoom_enable ) active_functions++;
 
-	/* address of data table */
-	address = current_tilemap.linescroll_table_address + active_functions*4*cliprect->min_y;
+	/* address of data table: one entry per linescroll_interval lines (the threaded */
+	/* strips start on a multiple of 16 lines, so on a multiple of the interval) */
+	address = current_tilemap.linescroll_table_address + active_functions*4*(cliprect->min_y / (current_tilemap.linescroll_interval ? current_tilemap.linescroll_interval : 1));
 
 	/* get the first scroll values */
 	for ( i = 0; i < active_functions; i++ )
@@ -7423,8 +7476,8 @@ static void vdp2_check_tilemap(struct mame_bitmap *bitmap, const struct rectangl
 
 /*
 	The rotation windows of line y for x in [min_x, max_x]: 1 where the
-	pixel goes through, as vdp2_roz_window (and vdp2_roz_mode3_window
-	when mode3 is set) give per pixel, with the window coordinates and
+	pixel goes through (the rotation windows of R0W0E/R0W1E, and the
+	rotation parameter windows of RPW0E/RPW1E in mode 3), with the window coordinates and
 	settings read once for the line. Returns 0 when no window is enabled
 	(all the pixels go through), without filling the mask.
 */
@@ -7858,52 +7911,6 @@ static void vdp2_copy_roz_bitmap(struct mame_bitmap *bitmap,
 			}
 		}
 	}
-}
-
-static INLINE int vdp2_roz_window(int x, int y)
-{
-	int s_x=0,e_x=0,s_y=0,e_y=0;
-	int w0_pix, w1_pix;
-	UINT8 logic = VDP2_R0LOG;
-	UINT8 w0_enable = VDP2_R0W0E;
-	UINT8 w1_enable = VDP2_R0W1E;
-	UINT8 w0_area = VDP2_R0W0A;
-	UINT8 w1_area = VDP2_R0W1A;
-
-	if (w0_enable == 0 &&
-		w1_enable == 0)
-		return 1;
-
-	vdp2_get_window0_coordinates(&s_x, &e_x, &s_y, &e_y, y);
-	w0_pix = get_roz_window_pixel(s_x,e_x,s_y,e_y,x,y,w0_enable, w0_area);
-
-	vdp2_get_window1_coordinates(&s_x, &e_x, &s_y, &e_y, y);
-	w1_pix = get_roz_window_pixel(s_x,e_x,s_y,e_y,x,y,w1_enable, w1_area);
-
-	return (logic & 1 ? (w0_pix | w1_pix) : (w0_pix & w1_pix));
-}
-
-static INLINE int vdp2_roz_mode3_window(int x, int y, int rot_parameter)
-{
-	int s_x=0,e_x=0,s_y=0,e_y=0;
-	int w0_pix, w1_pix;
-	UINT8 logic = VDP2_RPLOG;
-	UINT8 w0_enable = VDP2_RPW0E;
-	UINT8 w1_enable = VDP2_RPW1E;
-	UINT8 w0_area = VDP2_RPW0A;
-	UINT8 w1_area = VDP2_RPW1A;
-
-	if (w0_enable == 0 &&
-		w1_enable == 0)
-		return rot_parameter ^ 1;
-
-	vdp2_get_window0_coordinates(&s_x, &e_x, &s_y, &e_y, y);
-	w0_pix = get_roz_window_pixel(s_x,e_x,s_y,e_y,x,y,w0_enable, w0_area);
-
-	vdp2_get_window1_coordinates(&s_x, &e_x, &s_y, &e_y, y);
-	w1_pix = get_roz_window_pixel(s_x,e_x,s_y,e_y,x,y,w1_enable, w1_area);
-
-	return (logic & 1 ? (w0_pix | w1_pix) : (w0_pix & w1_pix)) ^ rot_parameter;
 }
 
 static INLINE int get_roz_window_pixel(int s_x,int e_x,int s_y,int e_y,int x, int y,UINT8 winenable, UINT8 winarea)
@@ -9932,7 +9939,7 @@ static void vdp2_render_layers(struct mame_bitmap *bitmap, const struct rectangl
 	}
 }
 
-#ifdef HAVE_THREADS
+#ifdef STV_VIDEO_THREADS
 #include <rthreads/rthreads.h>
 
 #define VDP2_MAX_THREADS	4
@@ -9963,6 +9970,8 @@ static struct
 static void vdp2_render_band(struct mame_bitmap *bitmap, const struct rectangle *screen, int i, int n)
 {
 	int y;
+	vdp2_band_index = i;
+	vdp2_band_decoded_count[i] = 0;
 	for (y = screen->min_y + i * VDP2_STRIP; y <= screen->max_y; y += n * VDP2_STRIP)
 	{
 		struct rectangle strip = *screen;
@@ -9972,6 +9981,7 @@ static void vdp2_render_band(struct mame_bitmap *bitmap, const struct rectangle 
 			strip.max_y = screen->max_y;
 		vdp2_render_layers(bitmap, &strip, 1);
 	}
+	vdp2_band_index = -1;
 }
 
 static void vdp2_band_worker(void *arg)
@@ -10017,6 +10027,12 @@ static void vdp2_threads_stop(void)
 	scond_free(vdp2_mt.done);
 	slock_free(vdp2_mt.lock);
 	memset(&vdp2_mt, 0, sizeof(vdp2_mt));
+	for (i = 0; i < VDP2_MAX_THREADS; i++)
+	{
+		free(vdp2_band_decoded[i]);
+		vdp2_band_decoded[i] = NULL;
+		vdp2_band_decoded_count[i] = 0;
+	}
 }
 
 /* the screen in bands, 0 if the threads are not there (then the caller draws it alone) */
@@ -10047,6 +10063,13 @@ static int vdp2_render_threaded(struct mame_bitmap *bitmap, const struct rectang
 		bands = vdp2_mt.workers + 1;
 	if (bands < 2)
 		return 0;
+	for (i = 0; i < bands; i++)
+		if (!vdp2_band_decoded[i])
+		{
+			vdp2_band_decoded[i] = malloc(VDP2_DECODED_MAX * sizeof(UINT32));
+			if (!vdp2_band_decoded[i])
+				return 0;
+		}
 
 	/* the rotation plane caches first, alone */
 	vdp2_render_mode = VDP2_RENDER_PREPASS;
@@ -10069,6 +10092,18 @@ static int vdp2_render_threaded(struct mame_bitmap *bitmap, const struct rectang
 	while (vdp2_mt.pending)
 		scond_wait(vdp2_mt.done, vdp2_mt.lock);
 	slock_unlock(vdp2_mt.lock);
+
+	/* the elements the strips decoded are up to date now */
+	for (i = 0; i < bands; i++)
+	{
+		int k;
+		for (k = 0; k < vdp2_band_decoded_count[i]; k++)
+		{
+			UINT32 e = vdp2_band_decoded[i][k];
+			stv_gfx[e >> 24].dirty[e & 0xffffff] = 0;
+		}
+		vdp2_band_decoded_count[i] = 0;
+	}
 	vdp2_render_mode = VDP2_RENDER_NORMAL;
 	return 1;
 }
@@ -10088,7 +10123,7 @@ static void vdp2_render(struct mame_bitmap *bitmap, const struct rectangle *clip
 		memset(vdp1_sprite_priorities_min_x, 0xff, sizeof(vdp1_sprite_priorities_min_x));
 		memset(vdp1_sprite_priorities_max_x, 0, sizeof(vdp1_sprite_priorities_max_x));
 
-#ifdef HAVE_THREADS
+#ifdef STV_VIDEO_THREADS
 		/* strips of lines (of an even number of lines from an even one: an interlaced framebuffer line is two) */
 		if (options.stv_video_threads > 1 && !(cliprect->min_y & 1) && cliprect->max_y - cliprect->min_y >= 64 &&
 			vdp2_render_threaded(bitmap, cliprect))
@@ -10500,7 +10535,7 @@ VIDEO_START( stv_vdp2 )
 VIDEO_STOP( stv_vdp2 )
 {
 	int i;
-#ifdef HAVE_THREADS
+#ifdef STV_VIDEO_THREADS
 	vdp2_threads_stop();
 #endif
 	for (i = 0; i < 2; i++)
