@@ -1314,6 +1314,7 @@ void i8085_init(void)
 	state_save_register_UINT32("i8085", cpu, "IRQ1", &I.IRQ1, 1);
 	state_save_register_INT8("i8085", cpu, "NMI_STATE", &I.nmi_state, 1);
 	state_save_register_INT8("i8085", cpu, "IRQ_STATE", I.irq_state, 4);
+	state_save_register_UINT8("i8085", cpu, "RIM_IEN", &RIM_IEN, 1);
 }
 
 /****************************************************************************
@@ -1704,13 +1705,15 @@ void i8080_init(void)
 	state_save_register_UINT16("i8080", cpu, "SP", &I.SP.w.l, 1);
 	state_save_register_UINT16("i8080", cpu, "PC", &I.PC.w.l, 1);
 	state_save_register_UINT8("i8080", cpu, "HALT", &I.HALT, 1);
+	state_save_register_UINT8("i8080", cpu, "IM", &I.IM, 1);	/* the interrupt enable */
 	state_save_register_UINT8("i8080", cpu, "IREQ", &I.IREQ, 1);
 	state_save_register_UINT8("i8080", cpu, "ISRV", &I.ISRV, 1);
 	state_save_register_UINT32("i8080", cpu, "INTR", &I.INTR, 1);
 	state_save_register_UINT32("i8080", cpu, "IRQ2", &I.IRQ2, 1);
 	state_save_register_UINT32("i8080", cpu, "IRQ1", &I.IRQ1, 1);
 	state_save_register_INT8("i8080", cpu, "nmi_state", &I.nmi_state, 1);
-	state_save_register_INT8("i8080", cpu, "irq_state", I.irq_state, 1);
+	state_save_register_INT8("i8080", cpu, "irq_state", I.irq_state, 4);
+	state_save_register_UINT8("i8080", cpu, "RIM_IEN", &RIM_IEN, 1);
 }
 
 void i8080_reset(void *param) { i8085_reset(param); }

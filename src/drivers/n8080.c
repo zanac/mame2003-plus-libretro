@@ -11,6 +11,7 @@
 ***************************************************************************/
 
 #include "driver.h"
+#include "state.h"
 #include "vidhrdw/generic.h"
 #include "cpu/i8039/i8039.h"
 #include <math.h>
@@ -1011,9 +1012,34 @@ static PORT_WRITE_START( helifire_sound_io_writeport )
 PORT_END
 
 
+/* save states: the shift register, the sound pins and mono flops, the
+   colors and the HeliFire wave and flash. On a reset, the state system
+   ignores the second registration. */
+static void n8080_save_state(void)
+{
+	state_save_register_UINT32("n8080", 0, "shift_data",  &shift_data, 1);
+	state_save_register_UINT32("n8080", 0, "shift_bits",  &shift_bits, 1);
+	state_save_register_INT32 ("n8080", 0, "mono_flop",   (INT32 *)mono_flop, 3);
+	state_save_register_UINT16("n8080", 0, "prev_sound_pins", &prev_sound_pins, 1);
+	state_save_register_UINT16("n8080", 0, "curr_sound_pins", &curr_sound_pins, 1);
+	state_save_register_int   ("n8080", 0, "sheriff_color_mode", &sheriff_color_mode);
+	state_save_register_int   ("n8080", 0, "sheriff_color_data", &sheriff_color_data);
+	state_save_register_int   ("n8080", 0, "spacefev_ufo_frame", &spacefev_ufo_frame);
+	state_save_register_int   ("n8080", 0, "spacefev_ufo_cycle", &spacefev_ufo_cycle);
+	state_save_register_int   ("n8080", 0, "spacefev_red_screen", &spacefev_red_screen);
+	state_save_register_int   ("n8080", 0, "spacefev_red_cannon", &spacefev_red_cannon);
+	state_save_register_int   ("n8080", 0, "helifire_decay", &helifire_decay);
+	state_save_register_int   ("n8080", 0, "helifire_flash", &helifire_flash);
+	state_save_register_UINT8 ("n8080", 0, "helifire_LSFR", helifire_LSFR, 63);
+	state_save_register_UINT32("n8080", 0, "helifire_mv",  &helifire_mv, 1);
+	state_save_register_UINT32("n8080", 0, "helifire_sc",  &helifire_sc, 1);
+}
+
+
 static MACHINE_INIT( spacefev )
 {
 	n8080_hardware = 1;
+	n8080_save_state();
 
 	timer_pulse(TIME_IN_HZ(1000), 0, spacefev_vco_voltage_timer);
 
@@ -1042,6 +1068,7 @@ static MACHINE_INIT( spacefev )
 static MACHINE_INIT( sheriff )
 {
 	n8080_hardware = 2;
+	n8080_save_state();
 
 	sound_timer[0] = timer_alloc(stop_mono_flop);
 	sound_timer[1] = timer_alloc(stop_mono_flop);
@@ -1066,6 +1093,7 @@ static MACHINE_INIT( sheriff )
 static MACHINE_INIT( helifire )
 {
 	n8080_hardware = 3;
+	n8080_save_state();
 
 	timer_pulse(TIME_IN_HZ(1000), 0, helifire_decay_timer);
 
