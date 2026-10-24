@@ -29,6 +29,7 @@ The list of direct contributors to the MAME 2003-Plus github repository can be f
 * Bare Knuckle II (chinese bootleg of Megadrive version)
 * Bare Knuckle III (bootleg of Megadrive version)
 * Baryon: Future Assault
+* Beastie Feastie (Epos Tristar 9000) - Romset `beastf`; the Pac-Man conversion is now `beastfp`, as in current MAME
 * Big Fight - Big Trouble In The Atlantic Ocean
 * Bomb Kick
 * Boogie Wings
@@ -191,6 +192,7 @@ The list of direct contributors to the MAME 2003-Plus github repository can be f
 * Raiden DX
 * Raiden II / Raiden DX New
 * Recalhorn (prototype)
+* Revenger '84 (newer) - Romset `revngr84`; the older set `revenger` is a bad dump and stays not working
 * Riot
 * Rolling Crush
 * Round Up 5 - Super Delta Force
@@ -222,8 +224,11 @@ The list of direct contributors to the MAME 2003-Plus github repository can be f
 * Space Raider
 * Spectrum 2000 (Euro)
 * Squash
+* Stadium Cross (World, linkable) and (US) - Romsets `scrossa`, `scrossu`; `scross` now uses the ROM names of current MAME
 * Star Fire 2
 * Steel Worker
+* Street Fighter III 3rd Strike: Fight for the Future (Widescreen 20220908, Bank Bank hack) - Romset `sfiii3ws`
+* Street Fighter Zero 3 Mix v0.32 (Zero800 hack, CPS2Turbo) - Romset `sfz3mix`, optional music samples `sfz3mix.zip`
 * Success Joe
 * Super Bishi Bashi Championship (ver JAA, 2 Players)
 * Super Bubble Bobble (Sun Mixing, Megadrive clone hardware)
@@ -278,6 +283,7 @@ The list of direct contributors to the MAME 2003-Plus github repository can be f
 
 ## New Clones
 
+* Asura Buster - Eternal Warriors (USA), (Japan, set 2) and (Japan) (ARCADIA review build) - Romsets `asurabus`, `asurabusja`, `asurabusjr`; the Japan set 1 is now `asurabusj`, as in current MAME
 * Battle Shark (Japan, Joystick)
 * Botanic (French version)
 * Bubble Bobble (prototype on tokio hardware)
@@ -494,6 +500,7 @@ The list of direct contributors to the MAME 2003-Plus github repository can be f
 * Tapper - Romset `tapper`
 * Target Ball (Nude) - Romset `tgtball`
 * Task Force Harrier - Romsets `tharrier` and `tharierj`
+* The Dealer - Romset `dealer` - Epos Tristar 9000 board from current MAME
 * Thunder Blade - Romsets `thndrbld` and `thndrbld1`
 * Thunder Dragon - Romset `tdragon` - Minor sound issues remaining
 * Thunder Strike - Romset `tstrike`
@@ -582,6 +589,7 @@ The list of direct contributors to the MAME 2003-Plus github repository can be f
 * Air Buster
 * Ashita no Joe
 * Asterix
+* Asura Blade, Asura Buster (no more repeated voices and sound effects)
 * Athena
 * Bandito
 * Big Event Golf

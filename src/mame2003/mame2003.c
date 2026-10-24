@@ -754,6 +754,15 @@ void retro_set_input_state(retro_input_state_t cb) { input_cb = cb; }
 void retro_set_controller_port_device(unsigned in_port, unsigned device)
 {
   static bool run_update = false;
+
+  /* the frontend can set more ports than the core has: netplay sets all of
+   * its 16 ports on the clients, and RetroArch the ports of all its users.
+   * active_control_type[] has MAX_PLAYER_COUNT entries, and the fields that
+   * follow it in the options (4-way restrictor, TATE mode, sample rate,
+   * brightness...) must not be written. */
+  if (in_port >= MAX_PLAYER_COUNT)
+    return;
+
   if (in_port == (options.content_flags[CONTENT_CTRL_COUNT] - 1) ) run_update = true;
 
   options.active_control_type[in_port] = device;
@@ -1167,10 +1176,21 @@ struct JoystickInfo alternate_joystick_maps[MAX_PLAYER_COUNT][IDX_NUMBER_OF_INPU
 
 struct JoystickInfo mame_joy_map[(MAX_PLAYER_COUNT * OSD_INPUT_CODES_PER_PLAYER) + 1] = { { 0 } }; /* + 1 for final zeroed struct */
 
+/* the list only changes with the controller layouts: the input code asks for
+   it at every key check (about 100 times a frame), so it is built again only
+   when a layout changed */
+static unsigned joy_map_types[MAX_PLAYER_COUNT];
+static int joy_map_built;
+
 const struct JoystickInfo *osd_get_joy_list(void)
 {
   unsigned needle      = 0;
   unsigned port_number = 0;
+
+  if(joy_map_built && memcmp(joy_map_types, options.active_control_type, sizeof(joy_map_types)) == 0)
+    return mame_joy_map;
+  memcpy(joy_map_types, options.active_control_type, sizeof(joy_map_types));
+  joy_map_built = 1;
 
   for(port_number = 0; port_number < MAX_PLAYER_COUNT; port_number++)
   {

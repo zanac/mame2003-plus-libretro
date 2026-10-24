@@ -139,11 +139,14 @@
 #if (HAS_CCPU)
 #include "cpu/ccpu/ccpu.h"
 #endif
-#if (HAS_ADSP2100 || HAS_ADSP2101 || HAS_ADSP2104 || HAS_ADSP2105 || HAS_ADSP2115)
+#if (HAS_ADSP2100 || HAS_ADSP2101 || HAS_ADSP2104 || HAS_ADSP2105 || HAS_ADSP2115 || HAS_ADSP2181)
 #include "cpu/adsp2100/adsp2100.h"
 #endif
 #if (HAS_PSXCPU)
 #include "cpu/mips/psx.h"
+#endif
+#if (HAS_MN10200)
+#include "cpu/mn10200/mn10200.h"
 #endif
 #if (HAS_H83002)
 #include "cpu/h83002/h83002.h"
@@ -580,11 +583,17 @@ const struct cpu_interface cpuintrf[] =
 #if (HAS_ADSP2115)
 	CPU3(ADSP2115, adsp2115, 4,  0,1.00,16,17lew, -1,15,LE,2, 4 ),
 #endif
+#if (HAS_ADSP2181)
+	CPU3(ADSP2181, adsp2181, 10, 0,1.00,16,17lew, -1,15,LE,2, 4 ),
+#endif
 #if (HAS_PSXCPU)
 	CPU0(PSXCPU,   mips,	 1,  0,1.00,32,32ledw, 0,32,LE,4, 4 ),
 #endif
 #if (HAS_H83002)
 	CPU0(H83002,   h8_3002,	 8,  0,1.00,16,24bew,  0,24,BE,2,10 ),
+#endif
+#if (HAS_MN10200)
+	CPU0(MN10200,  mn10200,	 4,  0,1.00,16,24lew,  0,24,LE,1, 6 ),
 #endif
 #if (HAS_M37702)
 	/* 16 cpuint lines: the maskable ones (M37710_LINE_ADC..IRQ0); the

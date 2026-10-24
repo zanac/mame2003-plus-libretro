@@ -253,11 +253,17 @@ enum
 #if (HAS_ADSP2115)
 	CPU_ADSP2115,
 #endif
+#if (HAS_ADSP2181)
+	CPU_ADSP2181,
+#endif
 #if (HAS_PSXCPU)
 	CPU_PSXCPU,
 #endif
 #if (HAS_H83002)
 	CPU_H83002,
+#endif
+#if (HAS_MN10200)
+	CPU_MN10200,
 #endif
 #if (HAS_M37702)
 	CPU_M37702,

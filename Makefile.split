@@ -1073,6 +1073,14 @@ else
 CPUDEFS += -DHAS_ADSP2115=0
 endif
 
+CPU=$(strip $(findstring ADSP2181@,$(CPUS)))
+ifneq ($(CPU),)
+CPUDEFS += -DHAS_ADSP2181=1
+HAS_ADSP2100 = 1
+else
+CPUDEFS += -DHAS_ADSP2181=0
+endif
+
 CPU=$(strip $(findstring Z80@,$(CPUS)))
 ifneq ($(CPU),)
 CPUDEFS += -DHAS_Z80=1
@@ -1859,6 +1867,15 @@ CPUDEFS += -DHAS_H83002=1
 SOURCES_C += $(CORE_DIR)/cpu/h83002/h83002.c
 else
 CPUDEFS += -DHAS_H83002=0
+endif
+
+CPU=$(strip $(findstring MN10200@,$(CPUS)))
+ifneq ($(CPU),)
+OBJDIRS += $(CORE_DIR)/cpu/mn10200
+CPUDEFS += -DHAS_MN10200=1
+SOURCES_C += $(CORE_DIR)/cpu/mn10200/mn10200.c
+else
+CPUDEFS += -DHAS_MN10200=0
 endif
 
 CPU=$(strip $(findstring M37702@,$(CPUS)))
