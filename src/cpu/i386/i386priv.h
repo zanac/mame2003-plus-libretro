@@ -530,7 +530,10 @@ static INLINE UINT32 FETCH32(i386_state *cpustate)
 	return FETCH32_slow(cpustate);
 }
 
-static INLINE UINT8 READ8(i386_state *cpustate,UINT32 ea)
+static INLINE UINT8 READ8(i386_state *cpustate,UINT32 ea);
+static INLINE void WRITE8(i386_state *cpustate,UINT32 ea, UINT8 value);
+
+static UINT8 READ8_slow(i386_state *cpustate,UINT32 ea)
 {
 	UINT32 address = ea;
 
@@ -545,7 +548,7 @@ static INLINE UINT8 READ8(i386_state *cpustate,UINT32 ea)
 		return p ? *p : cpu_readmem32ledw(address);
 	}
 }
-static INLINE UINT16 READ16(i386_state *cpustate,UINT32 ea)
+static UINT16 READ16_slow(i386_state *cpustate,UINT32 ea)
 {
 	UINT16 value;
 	UINT32 address = ea;
@@ -567,7 +570,7 @@ static INLINE UINT16 READ16(i386_state *cpustate,UINT32 ea)
 	}
 	return value;
 }
-static INLINE UINT32 READ32(i386_state *cpustate,UINT32 ea)
+static UINT32 READ32_slow(i386_state *cpustate,UINT32 ea)
 {
 	UINT32 value;
 	UINT32 address = ea;
@@ -619,7 +622,7 @@ static INLINE UINT64 READ64(i386_state *cpustate,UINT32 ea)
 	return value;
 }
 
-static INLINE void WRITE8(i386_state *cpustate,UINT32 ea, UINT8 value)
+static void WRITE8_slow(i386_state *cpustate,UINT32 ea, UINT8 value)
 {
 	UINT32 address = ea;
 
@@ -637,7 +640,7 @@ static INLINE void WRITE8(i386_state *cpustate,UINT32 ea, UINT8 value)
 			cpu_writemem32ledw(address, value);
 	}
 }
-static INLINE void WRITE16(i386_state *cpustate,UINT32 ea, UINT16 value)
+static void WRITE16_slow(i386_state *cpustate,UINT32 ea, UINT16 value)
 {
 	UINT32 address = ea;
 
@@ -660,7 +663,7 @@ static INLINE void WRITE16(i386_state *cpustate,UINT32 ea, UINT16 value)
 		}
 	}
 }
-static INLINE void WRITE32(i386_state *cpustate,UINT32 ea, UINT32 value)
+static void WRITE32_slow(i386_state *cpustate,UINT32 ea, UINT32 value)
 {
 	UINT32 address = ea;
 
@@ -684,6 +687,89 @@ static INLINE void WRITE32(i386_state *cpustate,UINT32 ea, UINT32 value)
 				cpu_writemem32ledw_dword(address, value);
 		}
 	}
+}
+
+/* the data accesses: straight from the fast memory when the address is */
+/* in the cached region of the kind and paging is off, else the handlers */
+#ifndef MSB_FIRST
+#define FAST_DATA_OFFSET(cs, ea, n, kind) \
+	UINT32 off = ((ea) & (cs)->a20_mask) - (cs)->fast_start[kind]; \
+	if (off < (cs)->fast_size[kind] && (cs)->fast_size[kind] - off >= (n) && !((cs)->cr[0] & 0x80000000))
+#endif
+
+static INLINE UINT8 READ8(i386_state *cpustate,UINT32 ea)
+{
+#ifndef MSB_FIRST
+	FAST_DATA_OFFSET(cpustate, ea, 1, I386_FAST_READ)
+		return cpustate->fast_base[I386_FAST_READ][off];
+#endif
+	return READ8_slow(cpustate, ea);
+}
+
+static INLINE UINT16 READ16(i386_state *cpustate,UINT32 ea)
+{
+#ifndef MSB_FIRST
+	FAST_DATA_OFFSET(cpustate, ea, 2, I386_FAST_READ)
+	{
+		const UINT8 *p = cpustate->fast_base[I386_FAST_READ] + off;
+		return p[0] | (p[1] << 8);
+	}
+#endif
+	return READ16_slow(cpustate, ea);
+}
+
+static INLINE UINT32 READ32(i386_state *cpustate,UINT32 ea)
+{
+#ifndef MSB_FIRST
+	FAST_DATA_OFFSET(cpustate, ea, 4, I386_FAST_READ)
+	{
+		const UINT8 *p = cpustate->fast_base[I386_FAST_READ] + off;
+		return p[0] | (p[1] << 8) | (p[2] << 16) | ((UINT32)p[3] << 24);
+	}
+#endif
+	return READ32_slow(cpustate, ea);
+}
+
+static INLINE void WRITE8(i386_state *cpustate,UINT32 ea, UINT8 value)
+{
+#ifndef MSB_FIRST
+	FAST_DATA_OFFSET(cpustate, ea, 1, I386_FAST_WRITE)
+	{
+		cpustate->fast_base[I386_FAST_WRITE][off] = value;
+		return;
+	}
+#endif
+	WRITE8_slow(cpustate, ea, value);
+}
+
+static INLINE void WRITE16(i386_state *cpustate,UINT32 ea, UINT16 value)
+{
+#ifndef MSB_FIRST
+	FAST_DATA_OFFSET(cpustate, ea, 2, I386_FAST_WRITE)
+	{
+		UINT8 *p = cpustate->fast_base[I386_FAST_WRITE] + off;
+		p[0] = value;
+		p[1] = value >> 8;
+		return;
+	}
+#endif
+	WRITE16_slow(cpustate, ea, value);
+}
+
+static INLINE void WRITE32(i386_state *cpustate,UINT32 ea, UINT32 value)
+{
+#ifndef MSB_FIRST
+	FAST_DATA_OFFSET(cpustate, ea, 4, I386_FAST_WRITE)
+	{
+		UINT8 *p = cpustate->fast_base[I386_FAST_WRITE] + off;
+		p[0] = value;
+		p[1] = value >> 8;
+		p[2] = value >> 16;
+		p[3] = value >> 24;
+		return;
+	}
+#endif
+	WRITE32_slow(cpustate, ea, value);
 }
 
 static INLINE void WRITE64(i386_state *cpustate,UINT32 ea, UINT64 value)
