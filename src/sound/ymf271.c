@@ -288,7 +288,7 @@ static UINT16 ymf_exp[256];
 
 
 /* external memory (sample ROM) */
-static UINT8 read_byte(YMF271Chip *chip, UINT32 address)
+static INLINE UINT8 read_byte(YMF271Chip *chip, UINT32 address)
 {
 	if (chip->ext_direct)
 		return chip->ext_direct[address & chip->ext_direct_mask];
@@ -895,6 +895,25 @@ static void lfo_tick(opx_slot *s)
 	}
 }
 
+/* advance the LFO of one slot by n samples: the same as n lfo_tick() */
+static void lfo_advance(opx_slot *s, UINT32 n)
+{
+	UINT32 period, first;
+
+	if (s->lfo_wave == 0 || n == 0)
+		return;
+	period = lfo_period(s->lfo_freq);
+	first = (s->lfo_cnt + 1 >= period) ? 1 : period - s->lfo_cnt;
+	if (n < first)
+		s->lfo_cnt += n;
+	else
+	{
+		n -= first;
+		s->lfo_pos = (s->lfo_pos + 1 + n / period) & 127;
+		s->lfo_cnt = n % period;
+	}
+}
+
 /* bipolar LFO value for PM, -128..127 (wave 1 saw, 2 square, 3 triangle) */
 static INT32 lfo_pm(const opx_slot *s)
 {
@@ -988,7 +1007,7 @@ static UINT32 pcm_step(const opx_slot *s, INT32 pm)
 }
 
 /* 12-bit sample word at index pos of slot s (8-bit data = upper byte) */
-static INT32 pcm_word(YMF271Chip *chip, const opx_slot *s, UINT32 pos)
+static INLINE INT32 pcm_word(YMF271Chip *chip, const opx_slot *s, UINT32 pos)
 {
 	INT32 v;
 
@@ -1129,12 +1148,25 @@ static INT32 pan(INT32 v, UINT8 level)
 static void ymf271_update(int num, INT16 **outputs, int length)
 {
 	YMF271Chip *chip = &YMF271[num];
-	int i, g, n;
+	int i, g, n, a;
+	int active[NUM_SLOTS], nactive = 0;
 
 	/* the registers do not change inside one update */
 	for (g = 0; g < NUM_GROUPS; g++)
 		if (chip->groups[g].dirty)
 			rebuild_group(chip, g);
+
+	/* a slot off, with its output already cleared, only runs its LFO until */
+	/* a register write: that is done here at once, the others run per sample */
+	/* (most slots are off) */
+	for (n = 0; n < NUM_SLOTS; n++)
+	{
+		opx_slot *s = &chip->slots[n];
+		if (s->eg_state == EG_OFF && s->out == 0 && s->acc == 0)
+			lfo_advance(s, length);
+		else
+			active[nactive++] = n;
+	}
 
 	for (i = 0; i < length; i++)
 	{
@@ -1149,9 +1181,9 @@ static void ymf271_update(int num, INT16 **outputs, int length)
 
 		/* slots in hardware order: modulators with a lower slot number are
 		   taken from the current frame, higher-numbered ones from the previous */
-		for (n = 0; n < NUM_SLOTS; n++)
+		for (a = 0; a < nactive; a++)
 		{
-			opx_slot *s = &chip->slots[n];
+			opx_slot *s = &chip->slots[n = active[a]];
 			INT32 mod, out, pm;
 			UINT32 env;
 
