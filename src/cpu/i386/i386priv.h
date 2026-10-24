@@ -355,6 +355,34 @@ static INLINE int translate_address(i386_state *cpustate, UINT32 *address)
 	return 1;
 }
 
+/* the fast memory: plain RAM and ROM the driver registers with */
+/* i386_set_fastmem, fetched, read and written straight from the host */
+/* memory instead of through the memory handlers (little endian hosts) */
+struct i386_fastmem_region
+{
+	UINT32 start, end;
+	UINT8 *base;
+	int flags;
+};
+
+extern struct i386_fastmem_region i386_fastmem[I386_FASTMEM_MAX];
+extern int i386_fastmem_count;
+
+static INLINE UINT8 *i386_fast_ptr(UINT32 address, UINT32 len, int flag)
+{
+#ifdef LSB_FIRST
+	int i;
+
+	for (i = 0; i < i386_fastmem_count; i++)
+	{
+		const struct i386_fastmem_region *r = &i386_fastmem[i];
+		if (address >= r->start && address <= r->end - (len - 1) && (r->flags & flag))
+			return r->base + (address - r->start);
+	}
+#endif
+	return NULL;
+}
+
 static INLINE void CHANGE_PC(i386_state *cpustate, UINT32 pc)
 {
 	UINT32 address;
@@ -393,7 +421,11 @@ static INLINE UINT8 FETCH(i386_state *cpustate)
 		translate_address(cpustate,&address);
 	}
 
-	value = cpu_readmem32ledw(address & cpustate->a20_mask);
+	address &= cpustate->a20_mask;
+	{
+		UINT8 *p = i386_fast_ptr(address, 1, I386_FASTMEM_FETCH);
+		value = p ? *p : cpu_readmem32ledw(address);
+	}
 	cpustate->eip++;
 	cpustate->pc++;
 	return value;
@@ -412,7 +444,10 @@ static INLINE UINT16 FETCH16(i386_state *cpustate)
 			translate_address(cpustate,&address);
 		}
 		address &= cpustate->a20_mask;
-		value = cpu_readmem32ledw_word(address);
+		{
+			UINT8 *p = i386_fast_ptr(address, 2, I386_FASTMEM_FETCH);
+			value = p ? *(UINT16 *)p : cpu_readmem32ledw_word(address);
+		}
 		cpustate->eip += 2;
 		cpustate->pc += 2;
 	}
@@ -435,7 +470,10 @@ static INLINE UINT32 FETCH32(i386_state *cpustate)
 		}
 
 		address &= cpustate->a20_mask;
-		value = cpu_readmem32ledw_dword(address);
+		{
+			UINT8 *p = i386_fast_ptr(address, 4, I386_FASTMEM_FETCH);
+			value = p ? *(UINT32 *)p : cpu_readmem32ledw_dword(address);
+		}
 		cpustate->eip += 4;
 		cpustate->pc += 4;
 	}
@@ -452,7 +490,10 @@ static INLINE UINT8 READ8(i386_state *cpustate,UINT32 ea)
 	}
 
 	address &= cpustate->a20_mask;
-	return cpu_readmem32ledw(address);
+	{
+		UINT8 *p = i386_fast_ptr(address, 1, I386_FASTMEM_READ);
+		return p ? *p : cpu_readmem32ledw(address);
+	}
 }
 static INLINE UINT16 READ16(i386_state *cpustate,UINT32 ea)
 {
@@ -469,7 +510,10 @@ static INLINE UINT16 READ16(i386_state *cpustate,UINT32 ea)
 		}
 
 		address &= cpustate->a20_mask;
-		value = cpu_readmem32ledw_word(address );
+		{
+			UINT8 *p = i386_fast_ptr(address, 2, I386_FASTMEM_READ);
+			value = p ? *(UINT16 *)p : cpu_readmem32ledw_word(address);
+		}
 	}
 	return value;
 }
@@ -490,7 +534,10 @@ static INLINE UINT32 READ32(i386_state *cpustate,UINT32 ea)
 		}
 
 		address &= cpustate->a20_mask;
-		value = cpu_readmem32ledw_dword(address );
+		{
+			UINT8 *p = i386_fast_ptr(address, 4, I386_FASTMEM_READ);
+			value = p ? *(UINT32 *)p : cpu_readmem32ledw_dword(address);
+		}
 	}
 	return value;
 }
@@ -532,7 +579,13 @@ static INLINE void WRITE8(i386_state *cpustate,UINT32 ea, UINT8 value)
 	}
 
 	address &= cpustate->a20_mask;
-	cpu_writemem32ledw(address, value);
+	{
+		UINT8 *p = i386_fast_ptr(address, 1, I386_FASTMEM_WRITE);
+		if (p)
+			*p = value;
+		else
+			cpu_writemem32ledw(address, value);
+	}
 }
 static INLINE void WRITE16(i386_state *cpustate,UINT32 ea, UINT16 value)
 {
@@ -548,7 +601,13 @@ static INLINE void WRITE16(i386_state *cpustate,UINT32 ea, UINT16 value)
 		}
 
 		address &= cpustate->a20_mask;
-		cpu_writemem32ledw_word(address, value);
+		{
+			UINT8 *p = i386_fast_ptr(address, 2, I386_FASTMEM_WRITE);
+			if (p)
+				*(UINT16 *)p = value;
+			else
+				cpu_writemem32ledw_word(address, value);
+		}
 	}
 }
 static INLINE void WRITE32(i386_state *cpustate,UINT32 ea, UINT32 value)
@@ -566,8 +625,14 @@ static INLINE void WRITE32(i386_state *cpustate,UINT32 ea, UINT32 value)
 			translate_address(cpustate,&address);
 		}
 
-		ea &= cpustate->a20_mask;
-		cpu_writemem32ledw_dword(address, value);
+		address &= cpustate->a20_mask;
+		{
+			UINT8 *p = i386_fast_ptr(address, 4, I386_FASTMEM_WRITE);
+			if (p)
+				*(UINT32 *)p = value;
+			else
+				cpu_writemem32ledw_dword(address, value);
+		}
 	}
 }
 
@@ -590,7 +655,7 @@ static INLINE void WRITE64(i386_state *cpustate,UINT32 ea, UINT64 value)
 			translate_address(cpustate,&address);
 		}
 
-		ea &= cpustate->a20_mask;
+		address &= cpustate->a20_mask;
 		cpu_writemem32ledw_dword(address+0, value & 0xffffffff);
 		cpu_writemem32ledw_dword(address+4, (value >> 32) & 0xffffffff);
 	}

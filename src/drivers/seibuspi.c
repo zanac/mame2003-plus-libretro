@@ -702,8 +702,9 @@ static void spi_postload(void)
 }
 
 /* the board, the memory banks, the chips and the save states; from every */
-/* DRIVER_INIT, rise: the RISE10 / RISE11 sprite chip instead of the SEI252 */
-static void spi_common_init(int rise)
+/* DRIVER_INIT, rise: the RISE10 / RISE11 sprite chip instead of the SEI252; */
+/* speedup: the address of the idle loop counter, read by its handler */
+static void spi_common_init(int rise, offs_t speedup)
 {
 	const struct Memory_ReadAddress32 *map = (const struct Memory_ReadAddress32 *)Machine->drv->cpu[0].memory_read;
 
@@ -726,6 +727,17 @@ static void spi_common_init(int rise)
 		cpu_setbank(5, memory_region(REGION_CPU2));
 		cpu_setbank(6, z80_ram);
 	}
+
+	/* the 386 fetches and reads the ROM and the RAM directly; not the I/O */
+	/* at 0x400-0x7ff, and the idle loop counter is read by its handler */
+	i386_set_fastmem(0x00200000, 0x003fffff, memory_region(REGION_CPU1), I386_FASTMEM_FETCH | I386_FASTMEM_READ);
+	i386_set_fastmem(0x00000800, speedup - 1, (UINT8 *)spi_mainram + 0x800, I386_FASTMEM_FETCH | I386_FASTMEM_READ | I386_FASTMEM_WRITE);
+	i386_set_fastmem(speedup + 4, 0x0003ffff, (UINT8 *)spi_mainram + speedup + 4, I386_FASTMEM_FETCH | I386_FASTMEM_READ | I386_FASTMEM_WRITE);
+	i386_set_fastmem(speedup, speedup + 3, (UINT8 *)spi_mainram + speedup, I386_FASTMEM_FETCH | I386_FASTMEM_WRITE);
+	i386_set_fastmem(0x00000000, 0x000003ff, (UINT8 *)spi_mainram, I386_FASTMEM_FETCH | I386_FASTMEM_READ | I386_FASTMEM_WRITE);
+	i386_set_fastmem(0xffe00000, 0xffffffff, memory_region(REGION_CPU1), I386_FASTMEM_FETCH | I386_FASTMEM_READ);
+	if (spi_board <= SPI_SXX2C_RISE)
+		i386_set_fastmem(0x00a00000, 0x013fffff, memory_region(REGION_USER1), I386_FASTMEM_READ);
 
 	if (spi_board <= SPI_SXX2C_RISE)
 	{
@@ -962,48 +974,48 @@ SPEEDUP( rdft_speedup, 0x00298d0 )
 SPEEDUP( rf2_speedup, 0x00282ac )
 SPEEDUP( rfjet_speedup, 0x002894c )
 
-static void init_sei252(void)
+static void init_sei252(offs_t speedup)
 {
 	seibuspi_text_decrypt(memory_region(REGION_GFX1));
 	seibuspi_bg_decrypt(memory_region(REGION_GFX2), memory_region_length(REGION_GFX2));
 	seibuspi_sprite_decrypt(memory_region(REGION_GFX3), 0x400000);
-	spi_common_init(0);
+	spi_common_init(0, speedup);
 }
 
 static DRIVER_INIT( senkyu )
 {
 	install_mem_read32_handler(0, 0x0018cb4, 0x0018cb7, senkyu_speedup);
-	init_sei252();
+	init_sei252(0x0018cb4);
 }
 
 static DRIVER_INIT( senkyua )
 {
 	install_mem_read32_handler(0, 0x0018c9c, 0x0018c9f, senkyua_speedup);
-	init_sei252();
+	init_sei252(0x0018c9c);
 }
 
 static DRIVER_INIT( batlball )
 {
 	install_mem_read32_handler(0, 0x0018db4, 0x0018db7, batlball_speedup);
-	init_sei252();
+	init_sei252(0x0018db4);
 }
 
 static DRIVER_INIT( viprp1 )
 {
 	install_mem_read32_handler(0, 0x001e2e0, 0x001e2e3, viprp1_speedup);
-	init_sei252();
+	init_sei252(0x001e2e0);
 }
 
 static DRIVER_INIT( viprp1o )
 {
 	install_mem_read32_handler(0, 0x001d49c, 0x001d49f, viprp1o_speedup);
-	init_sei252();
+	init_sei252(0x001d49c);
 }
 
 static DRIVER_INIT( rdft )
 {
 	install_mem_read32_handler(0, 0x00298d0, 0x00298d3, rdft_speedup);
-	init_sei252();
+	init_sei252(0x00298d0);
 }
 
 static DRIVER_INIT( rdft2 )
@@ -1012,7 +1024,7 @@ static DRIVER_INIT( rdft2 )
 	seibuspi_rdft2_text_decrypt(memory_region(REGION_GFX1));
 	seibuspi_rdft2_bg_decrypt(memory_region(REGION_GFX2), memory_region_length(REGION_GFX2));
 	seibuspi_rise10_sprite_decrypt(memory_region(REGION_GFX3), 0x600000);
-	spi_common_init(1);
+	spi_common_init(1, 0x00282ac);
 }
 
 static DRIVER_INIT( rfjet )
@@ -1021,7 +1033,7 @@ static DRIVER_INIT( rfjet )
 	seibuspi_rfjet_text_decrypt(memory_region(REGION_GFX1));
 	seibuspi_rfjet_bg_decrypt(memory_region(REGION_GFX2), memory_region_length(REGION_GFX2));
 	seibuspi_rise11_sprite_decrypt_rfjet(memory_region(REGION_GFX3), 0x800000);
-	spi_common_init(1);
+	spi_common_init(1, 0x002894c);
 }
 
 static DRIVER_INIT( rdft22kc ) { init_rdft2(); }

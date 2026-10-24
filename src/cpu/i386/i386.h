@@ -14,6 +14,15 @@
 
 extern int i386_ICount;
 
+/* the fast memory: a range of plain RAM or ROM at base, which the CPU */
+/* fetches, reads or writes directly (flags), without the memory handlers; */
+/* set from DRIVER_INIT, emptied at the CPU init. Little endian hosts only */
+#define I386_FASTMEM_MAX		8
+#define I386_FASTMEM_FETCH		1
+#define I386_FASTMEM_READ		2
+#define I386_FASTMEM_WRITE		4
+void i386_set_fastmem(UINT32 start, UINT32 end, UINT8 *base, int flags);
+
 void i386_init(void);
 void i386_reset(void *param);
 void i386_exit(void);

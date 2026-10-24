@@ -531,6 +531,21 @@ static void i386_postload(void)
 	CHANGE_PC(cpustate,cpustate->eip);
 }
 
+struct i386_fastmem_region i386_fastmem[I386_FASTMEM_MAX];
+int i386_fastmem_count;
+
+void i386_set_fastmem(UINT32 start, UINT32 end, UINT8 *base, int flags)
+{
+	if (i386_fastmem_count < I386_FASTMEM_MAX)
+	{
+		struct i386_fastmem_region *r = &i386_fastmem[i386_fastmem_count++];
+		r->start = start;
+		r->end = end;
+		r->base = base;
+		r->flags = flags;
+	}
+}
+
 void i386_init(void)
 {
 	int i, j;
@@ -541,6 +556,7 @@ void i386_init(void)
 	i386_state *cpustate = &I;
 	static const char *const sregname[6] = { "es", "cs", "ss", "ds", "fs", "gs" };
 
+	i386_fastmem_count = 0;
 	build_cycle_table();
 
 	for( i=0; i < 256; i++ ) {
