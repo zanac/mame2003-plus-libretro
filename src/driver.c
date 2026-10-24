@@ -3487,6 +3487,8 @@ Sep.1994 Quiz Ghost Hunter
 	DRIVER( vmahjong )
 	DRIVER( winterht )
 	DRIVER( znpwfv )
+	DRIVER( znpwfvt )
+	DRIVER( znpwfve )
 
 	DRIVER( danchih )
 	DRIVER( mausuke )

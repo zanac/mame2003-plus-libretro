@@ -340,6 +340,7 @@ static const char *stv_required_bios(const char *name)
     { "diehard",  "us" },
     { "smleague", "us" },
     { "znpwfvt",  "taiwan" },
+    { "znpwfve",  "taiwan" },
     { "critcrsh", "europe" },
     { "tatacot",  "japan" },
   };

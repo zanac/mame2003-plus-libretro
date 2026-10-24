@@ -4669,6 +4669,47 @@ ROM_START( znpwfv )
 	ROM_LOAD16_WORD_SWAP( "mpr20407.10",   0x2400000, 0x0400000, CRC(58356050) SHA1(f8fb5a14f4ec516093c785891b05d55ae345754e) ) /* good */
 ROM_END
 
+ROM_START( znpwfvt )
+	STV_BIOS	/* only runs with the Taiwan BIOS: the core selects it (stv_required_bios) */
+
+	ROM_REGION32_BE( 0x2800000, REGION_USER1, ROMREGION_ERASEFF )
+	ROM_LOAD16_BYTE( "epr20408.13",    0x0000001, 0x0100000, CRC(1d62fcf6) SHA1(3651261aa755da27b11462f2705311b7c639a687) ) /* good */
+	ROM_RELOAD_PLAIN( 0x0200000, 0x0100000 )
+	ROM_RELOAD_PLAIN( 0x0300000, 0x0100000 )
+	ROM_LOAD16_WORD_SWAP( "mpr20400.2",    0x0400000, 0x0400000, CRC(1edfbe05) SHA1(b0edd3f3d57408101ae6eb0aec742afbb4d289ca) ) /* good */
+	ROM_LOAD16_WORD_SWAP( "mpr20401.3",    0x0800000, 0x0400000, CRC(99e98937) SHA1(e1b4d12a0b4d0fe97a62fcc085e19cce77657c99) ) /* good */
+	ROM_LOAD16_WORD_SWAP( "mpr20402.4",    0x0c00000, 0x0400000, CRC(4572aa60) SHA1(8b2d76ea8c6e2f472c6ee7c9b6ad6e80e6a1a85a) ) /* good */
+	ROM_LOAD16_WORD_SWAP( "mpr20403.5",    0x1000000, 0x0400000, CRC(26a8e13e) SHA1(07f5564b704598e3c3580d3d620ecc4f14549dbd) ) /* good */
+	ROM_LOAD16_WORD_SWAP( "mpr20404.6",    0x1400000, 0x0400000, CRC(0b70275d) SHA1(47b8672e19c698dc948760f7091f4c6280e728d0) ) /* good */
+	ROM_LOAD16_WORD_SWAP( "mpr20399.1",    0x1800000, 0x0400000, CRC(c178a96e) SHA1(65f4aa05187d48ba8ad4fe75ff6ffe1f8524831d) ) /* good */
+	ROM_LOAD16_WORD_SWAP( "mpr20405.8",    0x1c00000, 0x0400000, CRC(f53337b7) SHA1(09a21f81016ee54f10554ae1f790415d7436afe0) ) /* good */
+	ROM_LOAD16_WORD_SWAP( "mpr20406.9",    0x2000000, 0x0400000, CRC(b677c175) SHA1(d0de7b5a29928036df0bdfced5a8021c0999eb26) ) /* good */
+	ROM_LOAD16_WORD_SWAP( "mpr20407.10",   0x2400000, 0x0400000, CRC(58356050) SHA1(f8fb5a14f4ec516093c785891b05d55ae345754e) ) /* good */
+ROM_END
+
+/* English translation hack (bootleg): the Taiwan program, which shows the
+   English graphics of the game, with the graphics it left in Japanese
+   redrawn in English (the profiles of Hiroshi Hase and The Patriot, the VS
+   names, the DANGER body parts, the data / password panels) and the victory
+   newspapers carrying a translation of the Japanese lines. Taiwan BIOS. */
+ROM_START( znpwfve )
+	STV_BIOS	/* only runs with the Taiwan BIOS: the core selects it (stv_required_bios) */
+
+	ROM_REGION32_BE( 0x2800000, REGION_USER1, ROMREGION_ERASEFF )
+	ROM_LOAD16_BYTE( "epr20408.13",    0x0000001, 0x0100000, CRC(1d62fcf6) SHA1(3651261aa755da27b11462f2705311b7c639a687) ) /* good */
+	ROM_RELOAD_PLAIN( 0x0200000, 0x0100000 )
+	ROM_RELOAD_PLAIN( 0x0300000, 0x0100000 )
+	ROM_LOAD16_WORD_SWAP( "mpr20400.2",    0x0400000, 0x0400000, CRC(1edfbe05) SHA1(b0edd3f3d57408101ae6eb0aec742afbb4d289ca) ) /* good */
+	ROM_LOAD16_WORD_SWAP( "mpr20401.3",    0x0800000, 0x0400000, CRC(99e98937) SHA1(e1b4d12a0b4d0fe97a62fcc085e19cce77657c99) ) /* good */
+	ROM_LOAD16_WORD_SWAP( "mpr20402.4",    0x0c00000, 0x0400000, CRC(4572aa60) SHA1(8b2d76ea8c6e2f472c6ee7c9b6ad6e80e6a1a85a) ) /* good */
+	ROM_LOAD16_WORD_SWAP( "mpr20403.5",    0x1000000, 0x0400000, CRC(26a8e13e) SHA1(07f5564b704598e3c3580d3d620ecc4f14549dbd) ) /* good */
+	ROM_LOAD16_WORD_SWAP( "mpr20404.6",    0x1400000, 0x0400000, CRC(0b70275d) SHA1(47b8672e19c698dc948760f7091f4c6280e728d0) ) /* good */
+	ROM_LOAD16_WORD_SWAP( "mpr20399.1",    0x1800000, 0x0400000, CRC(c178a96e) SHA1(65f4aa05187d48ba8ad4fe75ff6ffe1f8524831d) ) /* good */
+	ROM_LOAD16_WORD_SWAP( "mpr20405.8",    0x1c00000, 0x0400000, CRC(f53337b7) SHA1(09a21f81016ee54f10554ae1f790415d7436afe0) ) /* good */
+	ROM_LOAD16_WORD_SWAP( "znpe20406.9",   0x2000000, 0x0400000, CRC(b73ccd2c) SHA1(75b6d5c568ed5baf594b186db782e7e9af55205b) ) /* English graphics */
+	ROM_LOAD16_WORD_SWAP( "znpe20407.10",  0x2400000, 0x0400000, CRC(d15eb928) SHA1(5217ec91daca0d9b5bc56a904ea09765567598d5) ) /* English graphics */
+ROM_END
+
 ROM_START( danchih )
 	STV_BIOS
 
@@ -5248,6 +5289,8 @@ GAMEBX( 1998, sss,       stvbios, stvbios, stv, stv,  sss,      ROT0, "Victor / 
 GAMEBX( 1998, twcup98,   stvbios, stvbios, stv, stv,  twcup98,      ROT0, "Tecmo",      "Tecmo World Cup '98", GAME_IMPERFECT_SOUND | GAME_IMPERFECT_GRAPHICS, &generic_ctrl, NULL ) /* protected?*/
 GAMEBX( 1997, vmahjong,  stvbios, stvbios, stv, stvmp,stv,       ROT0, "Micronet",   "Virtual Mahjong", GAME_IMPERFECT_SOUND | GAME_IMPERFECT_GRAPHICS, &generic_ctrl, NULL )
 GAMEBX( 1997, znpwfv,    stvbios, stvbios, stv, stv,  ic13,      ROT0, "Sega", 	     "Zen Nippon Pro-Wrestling Featuring Virtua", GAME_IMPERFECT_SOUND | GAME_IMPERFECT_GRAPHICS, &generic_ctrl, NULL )
+GAMEBX( 1997, znpwfvt,   znpwfv,  stvbios, stv, stv,  ic13,      ROT0, "Sega", 	     "All Japan Pro-Wrestling Featuring Virtua (Taiwan)", GAME_IMPERFECT_SOUND | GAME_IMPERFECT_GRAPHICS, &generic_ctrl, NULL )
+GAMEBX( 1997, znpwfve,   znpwfv,  stvbios, stv, stv,  ic13,      ROT0, "bootleg", 	     "All Japan Pro-Wrestling Featuring Virtua (English translation)", GAME_IMPERFECT_SOUND | GAME_IMPERFECT_GRAPHICS, &generic_ctrl, NULL )
 
 /* there are probably a bunch of other games (some fishing games with cd-rom,Print Club 2 etc.) */
 
