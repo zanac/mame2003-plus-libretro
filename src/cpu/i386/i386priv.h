@@ -238,6 +238,10 @@ struct _i386_state
 	UINT32 feature_flags;
 	UINT64 tsc;
 
+	/* the fast memory cache, by kind of access (not saved: rebuilt on a miss) */
+	UINT32 fast_start[3], fast_size[3];
+	UINT8 *fast_base[3];
+
 	/* FPU */
 	X87_REG fpu_reg[8];
 	UINT16 fpu_control_word;
@@ -357,30 +361,25 @@ static INLINE int translate_address(i386_state *cpustate, UINT32 *address)
 
 /* the fast memory: plain RAM and ROM the driver registers with */
 /* i386_set_fastmem, fetched, read and written straight from the host */
-/* memory instead of through the memory handlers (little endian hosts) */
-struct i386_fastmem_region
+/* memory instead of through the memory handlers (little endian hosts). */
+/* A one-region cache for each kind of access; a miss looks the regions up */
+#define I386_FAST_FETCH	0
+#define I386_FAST_READ	1
+#define I386_FAST_WRITE	2
+
+static UINT8 *i386_fast_lookup(i386_state *cpustate, UINT32 address, UINT32 len, int kind);
+
+static INLINE UINT8 *i386_fast_ptr(i386_state *cpustate, UINT32 address, UINT32 len, int kind)
 {
-	UINT32 start, end;
-	UINT8 *base;
-	int flags;
-};
+#ifndef MSB_FIRST
+	UINT32 off = address - cpustate->fast_start[kind];
 
-extern struct i386_fastmem_region i386_fastmem[I386_FASTMEM_MAX];
-extern int i386_fastmem_count;
-
-static INLINE UINT8 *i386_fast_ptr(UINT32 address, UINT32 len, int flag)
-{
-#ifdef LSB_FIRST
-	int i;
-
-	for (i = 0; i < i386_fastmem_count; i++)
-	{
-		const struct i386_fastmem_region *r = &i386_fastmem[i];
-		if (address >= r->start && address <= r->end - (len - 1) && (r->flags & flag))
-			return r->base + (address - r->start);
-	}
-#endif
+	if (off < cpustate->fast_size[kind] && cpustate->fast_size[kind] - off >= len)
+		return cpustate->fast_base[kind] + off;
+	return i386_fast_lookup(cpustate, address, len, kind);
+#else
 	return NULL;
+#endif
 }
 
 static INLINE void CHANGE_PC(i386_state *cpustate, UINT32 pc)
@@ -411,7 +410,9 @@ static INLINE void NEAR_BRANCH(i386_state *cpustate, INT32 offs)
 	}
 }
 
-static INLINE UINT8 FETCH(i386_state *cpustate)
+static INLINE UINT8 FETCH(i386_state *cpustate);
+
+static UINT8 FETCH_slow(i386_state *cpustate)
 {
 	UINT8 value;
 	UINT32 address = cpustate->pc;
@@ -423,14 +424,14 @@ static INLINE UINT8 FETCH(i386_state *cpustate)
 
 	address &= cpustate->a20_mask;
 	{
-		UINT8 *p = i386_fast_ptr(address, 1, I386_FASTMEM_FETCH);
+		UINT8 *p = i386_fast_ptr(cpustate, address, 1, I386_FAST_FETCH);
 		value = p ? *p : cpu_readmem32ledw(address);
 	}
 	cpustate->eip++;
 	cpustate->pc++;
 	return value;
 }
-static INLINE UINT16 FETCH16(i386_state *cpustate)
+static UINT16 FETCH16_slow(i386_state *cpustate)
 {
 	UINT16 value;
 	UINT32 address = cpustate->pc;
@@ -445,7 +446,7 @@ static INLINE UINT16 FETCH16(i386_state *cpustate)
 		}
 		address &= cpustate->a20_mask;
 		{
-			UINT8 *p = i386_fast_ptr(address, 2, I386_FASTMEM_FETCH);
+			UINT8 *p = i386_fast_ptr(cpustate, address, 2, I386_FAST_FETCH);
 			value = p ? *(UINT16 *)p : cpu_readmem32ledw_word(address);
 		}
 		cpustate->eip += 2;
@@ -453,7 +454,7 @@ static INLINE UINT16 FETCH16(i386_state *cpustate)
 	}
 	return value;
 }
-static INLINE UINT32 FETCH32(i386_state *cpustate)
+static UINT32 FETCH32_slow(i386_state *cpustate)
 {
 	UINT32 value;
 	UINT32 address = cpustate->pc;
@@ -471,13 +472,62 @@ static INLINE UINT32 FETCH32(i386_state *cpustate)
 
 		address &= cpustate->a20_mask;
 		{
-			UINT8 *p = i386_fast_ptr(address, 4, I386_FASTMEM_FETCH);
+			UINT8 *p = i386_fast_ptr(cpustate, address, 4, I386_FAST_FETCH);
 			value = p ? *(UINT32 *)p : cpu_readmem32ledw_dword(address);
 		}
 		cpustate->eip += 4;
 		cpustate->pc += 4;
 	}
 	return value;
+}
+
+/* the fetches: straight from the fast memory when the address is in the */
+/* cached region and paging is off, else through the handlers */
+#ifndef MSB_FIRST
+#define FAST_FETCH_OFFSET(cs, n) \
+	UINT32 off = ((cs)->pc & (cs)->a20_mask) - (cs)->fast_start[I386_FAST_FETCH]; \
+	if (off < (cs)->fast_size[I386_FAST_FETCH] && (cs)->fast_size[I386_FAST_FETCH] - off >= (n) && !((cs)->cr[0] & 0x80000000))
+#endif
+
+static INLINE UINT8 FETCH(i386_state *cpustate)
+{
+#ifndef MSB_FIRST
+	FAST_FETCH_OFFSET(cpustate, 1)
+	{
+		cpustate->eip++;
+		cpustate->pc++;
+		return cpustate->fast_base[I386_FAST_FETCH][off];
+	}
+#endif
+	return FETCH_slow(cpustate);
+}
+
+static INLINE UINT16 FETCH16(i386_state *cpustate)
+{
+#ifndef MSB_FIRST
+	FAST_FETCH_OFFSET(cpustate, 2)
+	{
+		const UINT8 *p = cpustate->fast_base[I386_FAST_FETCH] + off;
+		cpustate->eip += 2;
+		cpustate->pc += 2;
+		return p[0] | (p[1] << 8);
+	}
+#endif
+	return FETCH16_slow(cpustate);
+}
+
+static INLINE UINT32 FETCH32(i386_state *cpustate)
+{
+#ifndef MSB_FIRST
+	FAST_FETCH_OFFSET(cpustate, 4)
+	{
+		const UINT8 *p = cpustate->fast_base[I386_FAST_FETCH] + off;
+		cpustate->eip += 4;
+		cpustate->pc += 4;
+		return p[0] | (p[1] << 8) | (p[2] << 16) | ((UINT32)p[3] << 24);
+	}
+#endif
+	return FETCH32_slow(cpustate);
 }
 
 static INLINE UINT8 READ8(i386_state *cpustate,UINT32 ea)
@@ -491,7 +541,7 @@ static INLINE UINT8 READ8(i386_state *cpustate,UINT32 ea)
 
 	address &= cpustate->a20_mask;
 	{
-		UINT8 *p = i386_fast_ptr(address, 1, I386_FASTMEM_READ);
+		UINT8 *p = i386_fast_ptr(cpustate, address, 1, I386_FAST_READ);
 		return p ? *p : cpu_readmem32ledw(address);
 	}
 }
@@ -511,7 +561,7 @@ static INLINE UINT16 READ16(i386_state *cpustate,UINT32 ea)
 
 		address &= cpustate->a20_mask;
 		{
-			UINT8 *p = i386_fast_ptr(address, 2, I386_FASTMEM_READ);
+			UINT8 *p = i386_fast_ptr(cpustate, address, 2, I386_FAST_READ);
 			value = p ? *(UINT16 *)p : cpu_readmem32ledw_word(address);
 		}
 	}
@@ -535,7 +585,7 @@ static INLINE UINT32 READ32(i386_state *cpustate,UINT32 ea)
 
 		address &= cpustate->a20_mask;
 		{
-			UINT8 *p = i386_fast_ptr(address, 4, I386_FASTMEM_READ);
+			UINT8 *p = i386_fast_ptr(cpustate, address, 4, I386_FAST_READ);
 			value = p ? *(UINT32 *)p : cpu_readmem32ledw_dword(address);
 		}
 	}
@@ -580,7 +630,7 @@ static INLINE void WRITE8(i386_state *cpustate,UINT32 ea, UINT8 value)
 
 	address &= cpustate->a20_mask;
 	{
-		UINT8 *p = i386_fast_ptr(address, 1, I386_FASTMEM_WRITE);
+		UINT8 *p = i386_fast_ptr(cpustate, address, 1, I386_FAST_WRITE);
 		if (p)
 			*p = value;
 		else
@@ -602,7 +652,7 @@ static INLINE void WRITE16(i386_state *cpustate,UINT32 ea, UINT16 value)
 
 		address &= cpustate->a20_mask;
 		{
-			UINT8 *p = i386_fast_ptr(address, 2, I386_FASTMEM_WRITE);
+			UINT8 *p = i386_fast_ptr(cpustate, address, 2, I386_FAST_WRITE);
 			if (p)
 				*(UINT16 *)p = value;
 			else
@@ -627,7 +677,7 @@ static INLINE void WRITE32(i386_state *cpustate,UINT32 ea, UINT32 value)
 
 		address &= cpustate->a20_mask;
 		{
-			UINT8 *p = i386_fast_ptr(address, 4, I386_FASTMEM_WRITE);
+			UINT8 *p = i386_fast_ptr(cpustate, address, 4, I386_FAST_WRITE);
 			if (p)
 				*(UINT32 *)p = value;
 			else

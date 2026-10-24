@@ -531,19 +531,46 @@ static void i386_postload(void)
 	CHANGE_PC(cpustate,cpustate->eip);
 }
 
-struct i386_fastmem_region i386_fastmem[I386_FASTMEM_MAX];
-int i386_fastmem_count;
+/* the fast memory regions of the driver */
+static struct
+{
+	UINT32 start, end;
+	UINT8 *base;
+	int flags;
+} i386_fastmem[I386_FASTMEM_MAX];
+static int i386_fastmem_count;
 
 void i386_set_fastmem(UINT32 start, UINT32 end, UINT8 *base, int flags)
 {
 	if (i386_fastmem_count < I386_FASTMEM_MAX)
 	{
-		struct i386_fastmem_region *r = &i386_fastmem[i386_fastmem_count++];
-		r->start = start;
-		r->end = end;
-		r->base = base;
-		r->flags = flags;
+		i386_fastmem[i386_fastmem_count].start = start;
+		i386_fastmem[i386_fastmem_count].end = end;
+		i386_fastmem[i386_fastmem_count].base = base;
+		i386_fastmem[i386_fastmem_count].flags = flags;
+		i386_fastmem_count++;
 	}
+	/* empty the caches */
+	memset(I.fast_size, 0, sizeof(I.fast_size));
+}
+
+/* a miss of the cache: the region of the address, cached; NULL if none */
+static UINT8 *i386_fast_lookup(i386_state *cpustate, UINT32 address, UINT32 len, int kind)
+{
+	int i;
+
+	for (i = 0; i < i386_fastmem_count; i++)
+	{
+		if ((i386_fastmem[i].flags & (1 << kind)) && address >= i386_fastmem[i].start &&
+			address <= i386_fastmem[i].end && i386_fastmem[i].end - address >= len - 1)
+		{
+			cpustate->fast_start[kind] = i386_fastmem[i].start;
+			cpustate->fast_size[kind] = i386_fastmem[i].end - i386_fastmem[i].start + 1;
+			cpustate->fast_base[kind] = i386_fastmem[i].base;
+			return i386_fastmem[i].base + (address - i386_fastmem[i].start);
+		}
+	}
+	return NULL;
 }
 
 void i386_init(void)
@@ -557,6 +584,7 @@ void i386_init(void)
 	static const char *const sregname[6] = { "es", "cs", "ss", "ds", "fs", "gs" };
 
 	i386_fastmem_count = 0;
+	memset(I.fast_size, 0, sizeof(I.fast_size));
 	build_cycle_table();
 
 	for( i=0; i < 256; i++ ) {
