@@ -39,7 +39,7 @@ ROM definitions in MAME but are commented out (not working there).
 
 - **CPU**: Hitachi SH7709S, an SH-3 at 102.4 MHz, no FPU. The game copies its
   program to work RAM (8 MB on CV1000-B, 16 MB on CV1000-D) and runs from
-  there. Little-endian.
+  there. Big-endian (the CV1000 boards run it in big-endian mode).
 - **Blitter**: an Altera Cyclone FPGA (Cave's "EPIC12"): it copies sprites
   from an 8192 x 4096 pixel VRAM to the screen, with flipping, tinting,
   transparency and 8 source and 8 destination blend modes, and uploads graphics to VRAM. Its busy time
@@ -58,7 +58,7 @@ ROM definitions in MAME but are commented out (not working there).
 
 | Part | In the core | Notes |
 |---|---|---|
-| 32-bit little-endian CPU interface with 32-bit addresses | yes | as `PSXCPU`, `R4600LE`: no change to `memory.c` |
+| 32-bit big-endian CPU interface with 32-bit addresses | yes | `32bedw`, as the SH-2: no change to `memory.c` |
 | SH-2 interpreter (`src/cpu/sh2`) | yes | SH-2 only: no SH-3 control registers, exception model, banked registers |
 | MPEG audio decoder (`src/sound/mpeg_audio.c`) | partly | C89 port of MAME's, layers I and II only: the AMM variant was left out |
 | SH-3 core and SH7709S peripherals | no | |
@@ -92,13 +92,20 @@ risk.
   SH-3 at 102.4 MHz is 3.6 times the clock; with the idle skips it should run
   at full speed on a PC. On ARM boards (Raspberry Pi 3/4) it is not likely,
   and the blitter adds a lot: MAME can run it in a separate thread, which
-  this core doesn't do.
+  this core doesn't do. A recompiler for the SH-3 is planned after the
+  interpreter: our own, on the sljit already in the core for the MIPS and
+  ADSP recompilers (x86, x86-64, ARMv7, AArch64), not MAME's UML DRC. It must
+  give the same results as the interpreter, cycle for cycle (MAME's cache and
+  bus timing included), so save states, rollback and netplay don't depend on
+  it; big-endian hosts and the systems without run-time code generation
+  keep the interpreter.
 - **Blitter timing.** The games wait on the blitter; MAME models its busy
   time from the number of SRAM clocks and upload gaps. Getting this wrong
   gives slowdowns or missing frames, not crashes.
-- **Big-endian hosts.** A little-endian CPU, 16-bit VRAM and byte-oriented
-  flash data on PowerPC: the `32ledw` interface handles the CPU side, the
-  blitter and NAND code must not assume the host order.
+- **Big-endian hosts.** A big-endian CPU on little-endian hosts (and the
+  reverse on PowerPC), 16-bit VRAM and byte-oriented flash data: the
+  `32bedw` interface handles the CPU side, the blitter and NAND code must
+  not assume the host order.
 - **Size.** The core grows by about 1-2 MB (memory is allocated only when a
   CV1000 game runs: MAME keeps the 8192 x 4096 VRAM as 32-bit pixels, 128 MB;
   16-bit pixels would halve it. Plus up to 16 MB of RAM and the 128 MB NAND).
