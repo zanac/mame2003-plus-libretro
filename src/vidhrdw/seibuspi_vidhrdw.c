@@ -37,7 +37,7 @@ static data16_t spi_sprite_ram[0x1000 / 2];
 static UINT16 spi_crtc_ram[0x40 / 2];
 static UINT32 spi_pens[6144];
 static UINT8 alpha_table[0x2000];
-static UINT8 alpha_color[0x2000 / 64];	/* a pen of these 64 is blended */
+static UINT8 alpha_color[0x2000 / 32];	/* a pen of these 32 is blended */
 
 static data32_t video_dma_length;
 static data32_t video_dma_address;
@@ -56,7 +56,7 @@ static UINT8 *tile_gfx, *tile_flags;
 static int tile_count;
 static UINT8 *char_gfx, *char_flags;
 static int char_count;
-static UINT8 *sprite_gfx;
+static UINT8 *sprite_gfx, *sprite_flags;
 static int sprite_count;
 
 #define GFX_TRANSPARENT	1	/* all the pixels are the transparent pen */
@@ -405,11 +405,28 @@ VIDEO_START( spi )
 	char_flags = auto_malloc(char_count);
 	sprite_count = memory_region_length(REGION_GFX3) / 3 / 64;
 	sprite_gfx = auto_malloc(sprite_count * 256);
-	if (!tile_gfx || !tile_flags || !char_gfx || !char_flags || !sprite_gfx)
+	sprite_flags = auto_malloc(sprite_count);
+	if (!tile_gfx || !tile_flags || !char_gfx || !char_flags || !sprite_gfx || !sprite_flags)
 		return 1;
 	decode_tiles(memory_region(REGION_GFX2), tile_count, 16, 6, tile_gfx, tile_flags);
 	decode_tiles(memory_region(REGION_GFX1), char_count, 8, 5, char_gfx, char_flags);
 	decode_sprites(memory_region(REGION_GFX3), memory_region_length(REGION_GFX3) / 3, sprite_count, sprite_gfx);
+	{
+		int n, i;
+		for (n = 0; n < sprite_count; n++)
+		{
+			const UINT8 *g = sprite_gfx + n * 256;
+			int opaque = 1, transparent = 1;
+			for (i = 0; i < 256; i++)
+			{
+				if (g[i] == 63)
+					opaque = 0;
+				else
+					transparent = 0;
+			}
+			sprite_flags[n] = (transparent ? GFX_TRANSPARENT : 0) | (opaque ? GFX_OPAQUE : 0);
+		}
+	}
 
 	/* TODO : Differs per games? */
 	/* alpha blending (preliminary) */
@@ -439,7 +456,7 @@ VIDEO_START( spi )
 		memset(alpha_color, 0, sizeof(alpha_color));
 		for (i = 0; i < 0x2000; i++)
 			if (alpha_table[i])
-				alpha_color[i >> 6] = 1;
+				alpha_color[i >> 5] = 1;
 	}
 
 	state_save_register_UINT32("spi_video", 0, "tilemap_ram", spi_tilemap_ram, 0x4000 / 4);
@@ -529,11 +546,14 @@ static void draw_sprites(void)
 			for (ay = 0; ay < sizey; ay++)
 			{
 				int sy = flipy ? (sy0 + 16 * (sizey - ay - 1)) : (sy0 + 16 * ay);
-				const UINT8 *gfx = sprite_gfx + (code % sprite_count) * 256;
+				int c = code % sprite_count;
+				const UINT8 *gfx = sprite_gfx + c * 256;
 				int x0 = 0, x1 = 16, y0 = 0, y1 = 16;
 
 				code++;
 				if (sx >= SPI_SCREEN_W || sy >= SPI_SCREEN_H || sx <= -16 || sy <= -16)
+					continue;
+				if (sprite_flags[c] & GFX_TRANSPARENT)
 					continue;
 				if (sx < 0) x0 = -sx;
 				if (sx + 16 > SPI_SCREEN_W) x1 = SPI_SCREEN_W - sx;
@@ -547,11 +567,24 @@ static void draw_sprites(void)
 					sprite_row_pri[sy + y] |= 1 << pri;
 					if (sx + x0 < sprite_row_minx[sy + y]) sprite_row_minx[sy + y] = sx + x0;
 					if (sx + x1 - 1 > sprite_row_maxx[sy + y]) sprite_row_maxx[sy + y] = sx + x1 - 1;
-					for (x = x0; x < x1; x++)
+					if (flipx)
 					{
-						int pix = src[flipx ? 15 - x : x];
-						if (pix != 63)
-							dest[x] = color + pix;
+						const UINT8 *s = src + 15;
+						for (x = x0; x < x1; x++)
+						{
+							int pix = s[-x];
+							if (pix != 63)
+								dest[x] = color + pix;
+						}
+					}
+					else
+					{
+						for (x = x0; x < x1; x++)
+						{
+							int pix = src[x];
+							if (pix != 63)
+								dest[x] = color + pix;
+						}
 					}
 				}
 			}
@@ -588,9 +621,11 @@ static void blend_sprite(struct mame_bitmap *bitmap, const struct rectangle *cli
 enum { LAYER_BACK = 0, LAYER_MIDL, LAYER_FORE };
 
 /* a 16x16 layer, 32x32 tiles in columns */
-static void combine_layer(struct mame_bitmap *bitmap, const struct rectangle *cliprect, int layer, int sx, int sy, int opaque, const data32_t *rowscroll)
+/* sprites_only: only where the priority 0 sprites are (the back layer */
+/* drawn again over them; elsewhere it would draw the same pixels again) */
+static void combine_layer(struct mame_bitmap *bitmap, const struct rectangle *cliprect, int layer, int sx, int sy, int opaque, const data32_t *rowscroll, int sprites_only)
 {
-	int x, y;
+	int x, y, maxx;
 	int offset, colorbase, codeor;
 
 	switch (layer)
@@ -629,32 +664,61 @@ static void combine_layer(struct mame_bitmap *bitmap, const struct rectangle *cl
 		}
 
 		x = cliprect->min_x;
-		while (x <= cliprect->max_x)
+		maxx = cliprect->max_x;
+		if (sprites_only)
+		{
+			if (!(sprite_row_pri[y] & 1))
+				continue;
+			if (sprite_row_minx[y] > x) x = sprite_row_minx[y];
+			if (sprite_row_maxx[y] < maxx) maxx = sprite_row_maxx[y];
+		}
+		while (x <= maxx)
 		{
 			int mx = (x + rx) & 511;
 			int tile_index = (mx >> 4) * 32 + row;
 			UINT32 tile = (spi_tilemap_ram[(tile_index >> 1) + offset] >> ((tile_index & 1) * 16)) & 0xffff;
-			int code = ((tile & 0x1fff) | codeor) % tile_count;
+			int code = (tile & 0x1fff) | codeor;
 			int pens = colorbase + ((tile >> 13) & 7) * 64;
-			const UINT8 *src = tile_gfx + code * 256 + line;
+			const UINT8 *src;
 			int span = 16 - (mx & 15);
 			int i;
 
-			if (x + span > cliprect->max_x + 1)
-				span = cliprect->max_x + 1 - x;
+			if (code >= tile_count)
+				code %= tile_count;
+			src = tile_gfx + code * 256 + line;
 
-			if (!alpha_color[pens >> 6] && (opaque || (tile_flags[code] & GFX_OPAQUE)))
+			if (x + span > maxx + 1)
+				span = maxx + 1 - x;
+
+			/* the span stays in the tile: its pixels from mx & 15 on */
+			src += mx & 15;
+			if (!opaque && (tile_flags[code] & GFX_TRANSPARENT))
+				;	/* nothing to draw */
+			else if (!(alpha_color[pens >> 5] | alpha_color[(pens >> 5) + 1]))
 			{
-				/* the usual case: all drawn, nothing blended */
+				/* nothing blended: the pens straight */
 				const UINT32 *pal = &spi_pens[pens];
-				for (i = 0; i < span; i++)
-					dest[x + i] = pal[src[(mx + i) & 15]];
+				UINT32 *d = &dest[x];
+				if (opaque || (tile_flags[code] & GFX_OPAQUE))
+				{
+					for (i = 0; i < span; i++)
+						d[i] = pal[src[i]];
+				}
+				else
+				{
+					for (i = 0; i < span; i++)
+					{
+						int pix = src[i];
+						if (pix != 63)
+							d[i] = pal[pix];
+					}
+				}
 			}
-			else if (opaque || !(tile_flags[code] & GFX_TRANSPARENT))
+			else
 			{
 				for (i = 0; i < span; i++)
 				{
-					int pix = src[(mx + i) & 15];
+					int pix = src[i];
 					if (opaque || pix != 63)
 						blend_pixel(&dest[x + i], pens + pix);
 				}
@@ -682,20 +746,38 @@ static void combine_text(struct mame_bitmap *bitmap, const struct rectangle *cli
 			int mx = x & 511;
 			int tile_index = row * 64 + (mx >> 3);
 			UINT32 tile = (spi_tilemap_ram[(tile_index >> 1) + text_layer_offset] >> ((tile_index & 1) * 16)) & 0xffff;
-			int code = (tile & 0xfff) % char_count;
+			int code = tile & 0xfff;
 			int pens = 5632 + ((tile >> 12) & 0xf) * 32;
-			const UINT8 *src = char_gfx + code * 64 + line;
+			const UINT8 *src;
 			int span = 8 - (mx & 7);
 			int i;
+
+			if (code >= char_count)
+				code %= char_count;
+			src = char_gfx + code * 64 + line;
 
 			if (x + span > cliprect->max_x + 1)
 				span = cliprect->max_x + 1 - x;
 
-			if (!(char_flags[code] & GFX_TRANSPARENT))
+			src += mx & 7;
+			if (char_flags[code] & GFX_TRANSPARENT)
+				;	/* nothing to draw */
+			else if (!alpha_color[pens >> 5])
+			{
+				const UINT32 *pal = &spi_pens[pens];
+				UINT32 *d = &dest[x];
+				for (i = 0; i < span; i++)
+				{
+					int pix = src[i];
+					if (pix != 31)
+						d[i] = pal[pix];
+				}
+			}
+			else
 			{
 				for (i = 0; i < span; i++)
 				{
-					int pix = src[(mx + i) & 7];
+					int pix = src[i];
 					if (pix != 31)
 						blend_pixel(&dest[x + i], pens + pix);
 				}
@@ -728,20 +810,20 @@ VIDEO_UPDATE( spi )
 	if (layer_enable & 1)
 		fillbitmap(bitmap, 0, cliprect);
 	else
-		combine_layer(bitmap, cliprect, LAYER_BACK, scrollram[0], scrollram[1], 1, back_rowscroll);
+		combine_layer(bitmap, cliprect, LAYER_BACK, scrollram[0], scrollram[1], 1, back_rowscroll, 0);
 
 	blend_sprite(bitmap, cliprect, 0);
 
 	/* if fore layer is enabled, draw priority 0 sprites behind back layer */
 	if ((layer_enable & 0x15) == 0)
-		combine_layer(bitmap, cliprect, LAYER_BACK, scrollram[0], scrollram[1], 0, back_rowscroll);
+		combine_layer(bitmap, cliprect, LAYER_BACK, scrollram[0], scrollram[1], 0, back_rowscroll, 1);
 
 	/* if fore layer is enabled, draw priority 1 sprites behind middle layer */
 	if (~layer_enable & 4)
 		blend_sprite(bitmap, cliprect, 1);
 
 	if (~layer_enable & 2)
-		combine_layer(bitmap, cliprect, LAYER_MIDL, scrollram[2], scrollram[3], 0, midl_rowscroll);
+		combine_layer(bitmap, cliprect, LAYER_MIDL, scrollram[2], scrollram[3], 0, midl_rowscroll, 0);
 
 	/* if fore layer is disabled, draw priority 1 sprites above middle layer */
 	if (layer_enable & 4)
@@ -750,7 +832,7 @@ VIDEO_UPDATE( spi )
 	blend_sprite(bitmap, cliprect, 2);
 
 	if (~layer_enable & 4)
-		combine_layer(bitmap, cliprect, LAYER_FORE, scrollram[4], scrollram[5], 0, fore_rowscroll);
+		combine_layer(bitmap, cliprect, LAYER_FORE, scrollram[4], scrollram[5], 0, fore_rowscroll, 0);
 
 	blend_sprite(bitmap, cliprect, 3);
 
