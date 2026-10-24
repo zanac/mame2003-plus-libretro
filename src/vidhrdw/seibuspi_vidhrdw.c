@@ -627,13 +627,18 @@ static void blend_sprite(struct mame_bitmap *bitmap, const struct rectangle *cli
 
 enum { LAYER_BACK = 0, LAYER_MIDL, LAYER_FORE };
 
-/* a 16x16 layer, 32x32 tiles in columns */
-/* sprites_only: only where the priority 0 sprites are (the back layer */
-/* drawn again over them; elsewhere it would draw the same pixels again) */
-static void combine_layer(struct mame_bitmap *bitmap, const struct rectangle *cliprect, int layer, int sx, int sy, int opaque, const data32_t *rowscroll, int sprites_only)
+/* the 32x32 tiles of a layer decoded once per frame: the graphics, */
+/* the pens and what drawing them takes */
+#define TILE_SKIP	1	/* all transparent */
+#define TILE_SOLID	2	/* no transparent pixel */
+#define TILE_ALPHA	4	/* a pen of the color is blended */
+static const UINT8 *layer_tile_gfx[3][1024];
+static UINT16 layer_tile_pens[3][1024];
+static UINT8 layer_tile_kind[3][1024];
+
+static void decode_layer_tiles(int layer)
 {
-	int x, y, maxx;
-	int offset, colorbase, codeor;
+	int offset, colorbase, codeor, i;
 
 	switch (layer)
 	{
@@ -654,6 +659,44 @@ static void combine_layer(struct mame_bitmap *bitmap, const struct rectangle *cl
 		codeor = bg_fore_layer_position | fore_layer_d13 | fore_layer_d14;
 		break;
 	}
+
+	for (i = 0; i < 1024; i++)
+	{
+		UINT32 tile = (spi_tilemap_ram[(i >> 1) + offset] >> ((i & 1) * 16)) & 0xffff;
+		int code = (tile & 0x1fff) | codeor;
+		int pens = colorbase + ((tile >> 13) & 7) * 64;
+		int kind = 0;
+
+		if (code >= tile_count)
+			code %= tile_count;
+		if (tile_flags[code] & GFX_TRANSPARENT)
+			kind |= TILE_SKIP;
+		if (tile_flags[code] & GFX_OPAQUE)
+			kind |= TILE_SOLID;
+		if (alpha_color[pens >> 5] | alpha_color[(pens >> 5) + 1])
+			kind |= TILE_ALPHA;
+		layer_tile_gfx[layer][i] = tile_gfx + code * 256;
+		layer_tile_pens[layer][i] = pens;
+		layer_tile_kind[layer][i] = kind;
+	}
+}
+
+/* a 16x16 layer, 32x32 tiles in columns */
+/* sprites_only: only where the priority 0 sprites are (the back layer */
+/* drawn again over them; elsewhere it would draw the same pixels again); */
+/* it uses the tiles decoded by the call before */
+static void combine_layer(struct mame_bitmap *bitmap, const struct rectangle *cliprect, int layer, int sx, int sy, int opaque, const data32_t *rowscroll, int sprites_only)
+{
+	const UINT8 * const *tgfx = layer_tile_gfx[layer];
+	const UINT16 *tpens = layer_tile_pens[layer];
+	const UINT8 *tkind = layer_tile_kind[layer];
+	/* the back layer is drawn with its transparent pen too */
+	int skip = opaque ? 0 : TILE_SKIP;
+	int solid = opaque ? 0 : TILE_SOLID;
+	int x, y, maxx;
+
+	if (!sprites_only)
+		decode_layer_tiles(layer);
 
 	for (y = cliprect->min_y; y <= cliprect->max_y; y++)
 	{
@@ -683,51 +726,55 @@ static void combine_layer(struct mame_bitmap *bitmap, const struct rectangle *cl
 		{
 			int mx = (x + rx) & 511;
 			int tile_index = (mx >> 4) * 32 + row;
-			UINT32 tile = (spi_tilemap_ram[(tile_index >> 1) + offset] >> ((tile_index & 1) * 16)) & 0xffff;
-			int code = (tile & 0x1fff) | codeor;
-			int pens = colorbase + ((tile >> 13) & 7) * 64;
-			const UINT8 *src;
+			int kind = tkind[tile_index];
 			int span = 16 - (mx & 15);
 			int i;
-
-			if (code >= tile_count)
-				code %= tile_count;
-			src = tile_gfx + code * 256 + line;
 
 			if (x + span > maxx + 1)
 				span = maxx + 1 - x;
 
-			/* the span stays in the tile: its pixels from mx & 15 on */
-			src += mx & 15;
-			if (!opaque && (tile_flags[code] & GFX_TRANSPARENT))
-				;	/* nothing to draw */
-			else if (!(alpha_color[pens >> 5] | alpha_color[(pens >> 5) + 1]))
+			if (!(kind & skip))
 			{
-				/* nothing blended: the pens straight */
-				const UINT32 *pal = &spi_pens[pens];
+				/* the span stays in the tile: its pixels from mx & 15 on */
+				const UINT8 *src = tgfx[tile_index] + line + (mx & 15);
+				int pens = tpens[tile_index];
 				UINT32 *d = &dest[x];
-				if (opaque || (tile_flags[code] & GFX_OPAQUE))
+
+				if (!(kind & TILE_ALPHA))
 				{
-					for (i = 0; i < span; i++)
-						d[i] = pal[src[i]];
+					/* nothing blended: the pens straight */
+					const UINT32 *pal = &spi_pens[pens];
+					if ((kind & solid) == solid)
+					{
+						if (span == 16)
+						{
+							d[0] = pal[src[0]]; d[1] = pal[src[1]]; d[2] = pal[src[2]]; d[3] = pal[src[3]];
+							d[4] = pal[src[4]]; d[5] = pal[src[5]]; d[6] = pal[src[6]]; d[7] = pal[src[7]];
+							d[8] = pal[src[8]]; d[9] = pal[src[9]]; d[10] = pal[src[10]]; d[11] = pal[src[11]];
+							d[12] = pal[src[12]]; d[13] = pal[src[13]]; d[14] = pal[src[14]]; d[15] = pal[src[15]];
+						}
+						else
+							for (i = 0; i < span; i++)
+								d[i] = pal[src[i]];
+					}
+					else
+					{
+						for (i = 0; i < span; i++)
+						{
+							int pix = src[i];
+							if (pix != 63)
+								d[i] = pal[pix];
+						}
+					}
 				}
 				else
 				{
 					for (i = 0; i < span; i++)
 					{
 						int pix = src[i];
-						if (pix != 63)
-							d[i] = pal[pix];
+						if (opaque || pix != 63)
+							blend_pixel(&d[i], pens + pix);
 					}
-				}
-			}
-			else
-			{
-				for (i = 0; i < span; i++)
-				{
-					int pix = src[i];
-					if (opaque || pix != 63)
-						blend_pixel(&dest[x + i], pens + pix);
 				}
 			}
 			x += span;
