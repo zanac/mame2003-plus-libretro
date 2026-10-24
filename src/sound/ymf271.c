@@ -278,6 +278,8 @@ typedef struct
 	void (*irq_callback)(int state);
 	read8_handler ext_mem_read;
 	write8_handler ext_mem_write;
+	const UINT8 *ext_direct;	/* the external memory, read directly while set */
+	UINT32 ext_direct_mask;
 } YMF271Chip;
 
 static YMF271Chip YMF271[MAX_YMF271];
@@ -288,6 +290,8 @@ static UINT16 ymf_exp[256];
 /* external memory (sample ROM) */
 static UINT8 read_byte(YMF271Chip *chip, UINT32 address)
 {
+	if (chip->ext_direct)
+		return chip->ext_direct[address & chip->ext_direct_mask];
 	if (chip->ext_mem_read)
 		return chip->ext_mem_read(address);
 	/* the ROM is mirrored over the high bits (unmapped past a non power-of-two size) */
@@ -1427,6 +1431,17 @@ int YMF271_sh_start( const struct MachineSound *msound )
 	state_save_register_func_postload(ymf271_postload);
 
 	return 0;
+}
+
+/* the driver can let the chip read its external memory straight from */
+/* host memory (size: a power of two, mirrored) while that memory is plain */
+/* (a flash in read array mode, say); NULL goes back to ext_read */
+void YMF271_set_ext_direct(int chipnum, const UINT8 *base, UINT32 size)
+{
+	YMF271Chip *chip = &YMF271[chipnum];
+
+	chip->ext_direct = base;
+	chip->ext_direct_mask = size - 1;
 }
 
 void YMF271_sh_stop( void )

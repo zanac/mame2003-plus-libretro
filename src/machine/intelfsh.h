@@ -35,6 +35,7 @@ UINT32 intelfsh_size( int chip );	/* in bytes */
 UINT16 intelfsh_read( int chip, UINT32 offset );	/* word offset (byte offset on an 8-bit chip) */
 void intelfsh_write( int chip, UINT32 offset, UINT16 data );
 void intelfsh_reset( int chip );	/* the reset pin: back to read array mode */
+int intelfsh_in_read_array( int chip );	/* reads return the contents */
 
 /* the contents in the NVRAM file, as little endian words (bytes on an 8-bit chip) */
 void intelfsh_nvram_load( int chip, mame_file *file );

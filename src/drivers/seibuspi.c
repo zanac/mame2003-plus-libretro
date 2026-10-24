@@ -511,10 +511,24 @@ static READ_HANDLER( spi_flash_r )
 	return intelfsh_read(offset >> 20, offset & 0xfffff);
 }
 
+/* the two flash chips, one after the other */
+static UINT8 *spi_flash_mem;
+
+/* while both flash chips are in read array mode, the YMF271 reads them */
+/* directly; a command (the update of the samples) goes back to the handlers */
+static void spi_flash_direct_update(void)
+{
+	if (intelfsh_in_read_array(0) && intelfsh_in_read_array(1))
+		YMF271_set_ext_direct(0, spi_flash_mem, 0x200000);
+	else
+		YMF271_set_ext_direct(0, NULL, 0);
+}
+
 static WRITE_HANDLER( spi_flash_w )
 {
 	offset &= 0x1fffff;
 	intelfsh_write(offset >> 20, offset & 0xfffff, data);
+	spi_flash_direct_update();
 }
 
 static void spi_ymf271_irq(int state)
@@ -696,6 +710,8 @@ static INTERRUPT_GEN( spi_interrupt )
 
 static void spi_postload(void)
 {
+	if (spi_board <= SPI_SXX2C_RISE)
+		spi_flash_direct_update();
 	cpu_setbank(5, memory_region(REGION_CPU2) + z80_lastbank * 0x8000);
 	if (spi_board == SPI_SYS386I)
 		OKIM6295_set_bank_base(1, oki_bank * 0x40000);
@@ -741,8 +757,9 @@ static void spi_common_init(int rise, offs_t speedup)
 
 	if (spi_board <= SPI_SXX2C_RISE)
 	{
-		intelfsh_init(0, INTELFSH_INTEL_E28F008SA, NULL);	/* Sharp LH28F008 on newer mainboard revision */
-		intelfsh_init(1, INTELFSH_INTEL_E28F008SA, NULL);
+		spi_flash_mem = auto_malloc(0x200000);
+		intelfsh_init(0, INTELFSH_INTEL_E28F008SA, (UINT16 *)spi_flash_mem);	/* Sharp LH28F008 on newer mainboard revision */
+		intelfsh_init(1, INTELFSH_INTEL_E28F008SA, (UINT16 *)(spi_flash_mem + 0x100000));
 		memcpy(intelfsh_data(0), memory_region(REGION_USER2), 0x100000);
 	}
 	if (spi_board <= SPI_SXX2E)
@@ -793,6 +810,7 @@ static MACHINE_INIT( spi )
 
 		/* Hack: fix the magic ID byte so users can't "brick" the machine */
 		((UINT8 *)intelfsh_data(0))[0] = memory_region(REGION_USER2)[0];
+		spi_flash_direct_update();
 	}
 	else if (spi_board == SPI_SYS386I)
 	{

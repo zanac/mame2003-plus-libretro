@@ -177,6 +177,11 @@ void intelfsh_reset( int chip )
 	timer_adjust( c->timer, TIME_NEVER, 0, 0 );
 }
 
+int intelfsh_in_read_array( int chip )
+{
+	return chips[ chip ].mode == FM_NORMAL;
+}
+
 UINT16 intelfsh_read( int chip, UINT32 offset )
 {
 	struct intelfsh_chip *c = &chips[ chip ];

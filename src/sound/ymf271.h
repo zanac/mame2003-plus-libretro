@@ -17,6 +17,7 @@ struct YMF271interface
 int YMF271_sh_start( const struct MachineSound *msound );
 void YMF271_sh_stop( void );
 void YMF271_sh_reset( void );
+void YMF271_set_ext_direct( int chipnum, const UINT8 *base, UINT32 size );
 
 READ_HANDLER( YMF271_0_r );
 WRITE_HANDLER( YMF271_0_w );

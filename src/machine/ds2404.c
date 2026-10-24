@@ -37,6 +37,8 @@ static UINT8 ds2404_ram[ 32 ];		/* the scratchpad: 256 bits */
 static UINT8 ds2404_rtc[ 5 ];		/* 40-bit RTC */
 static UINT8 ds2404_state[ 8 ];
 static UINT8 ds2404_state_ptr;
+static mame_timer *ds2404_timer;
+static double ds2404_timer_left;	/* time to the next tick, for save states */
 
 static void ds2404_tick( int param )
 {
@@ -48,6 +50,19 @@ static void ds2404_tick( int param )
 		if( ds2404_rtc[ i ] != 0 )
 			break;
 	}
+}
+
+/* 0.78 does not save its timers: the tick goes on with the time it had left */
+static void ds2404_presave( void )
+{
+	ds2404_timer_left = timer_timeleft( ds2404_timer );
+	if( ds2404_timer_left < 0 )
+		ds2404_timer_left = 0;
+}
+
+static void ds2404_postload( void )
+{
+	timer_adjust( ds2404_timer, ds2404_timer_left, 0, TIME_IN_HZ( 256 ) );
 }
 
 void ds2404_init( int ref_year, int ref_month, int ref_day )
@@ -79,7 +94,9 @@ void ds2404_init( int ref_year, int ref_month, int ref_day )
 	ds2404_end_offset = 0;
 	ds2404_a1 = ds2404_a2 = 0;
 
-	timer_pulse( TIME_IN_HZ( 256 ), 0, ds2404_tick );
+	ds2404_timer = timer_alloc( ds2404_tick );
+	timer_adjust( ds2404_timer, TIME_IN_HZ( 256 ), 0, TIME_IN_HZ( 256 ) );
+	ds2404_timer_left = 0;
 
 	state_save_register_UINT16( "ds2404", 0, "address", &ds2404_address, 1 );
 	state_save_register_UINT16( "ds2404", 0, "offset", &ds2404_offset, 1 );
@@ -91,6 +108,9 @@ void ds2404_init( int ref_year, int ref_month, int ref_day )
 	state_save_register_UINT8( "ds2404", 0, "rtc", ds2404_rtc, sizeof( ds2404_rtc ) );
 	state_save_register_UINT8( "ds2404", 0, "state", ds2404_state, sizeof( ds2404_state ) );
 	state_save_register_UINT8( "ds2404", 0, "state_ptr", &ds2404_state_ptr, 1 );
+	state_save_register_double( "ds2404", 0, "timer_left", &ds2404_timer_left, 1 );
+	state_save_register_func_presave( ds2404_presave );
+	state_save_register_func_postload( ds2404_postload );
 }
 
 static void ds2404_rom_cmd( UINT8 cmd )
