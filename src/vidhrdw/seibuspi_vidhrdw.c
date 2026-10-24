@@ -36,6 +36,8 @@ static data32_t spi_palette_ram[0x3000 / 4];
 static data16_t spi_sprite_ram[0x1000 / 2];
 static UINT16 spi_crtc_ram[0x40 / 2];
 static UINT32 spi_pens[6144];
+/* the source part of the blend of each pen: red and blue, green, times 0x7f */
+static UINT32 spi_pens_alpha_rb[6144], spi_pens_alpha_g[6144];
 static UINT8 alpha_table[0x2000];
 static UINT8 alpha_color[0x2000 / 32];	/* a pen of these 32 is blended */
 
@@ -100,6 +102,8 @@ static void set_pen(int pen, UINT32 data)
 	g = (g << 3) | (g >> 2);
 	b = (b << 3) | (b >> 2);
 	spi_pens[pen] = (r << 16) | (g << 8) | b;
+	spi_pens_alpha_rb[pen] = (spi_pens[pen] & 0xff00ff) * 0x7f;
+	spi_pens_alpha_g[pen] = (spi_pens[pen] & 0x00ff00) * 0x7f;
 }
 
 void spi_rf2_layer_bank_w(UINT8 data)
@@ -385,6 +389,8 @@ VIDEO_START( spi )
 	memset(spi_palette_ram, 0, sizeof(spi_palette_ram));
 	memset(spi_sprite_ram, 0, sizeof(spi_sprite_ram));
 	memset(spi_pens, 0, sizeof(spi_pens));
+	memset(spi_pens_alpha_rb, 0, sizeof(spi_pens_alpha_rb));
+	memset(spi_pens_alpha_g, 0, sizeof(spi_pens_alpha_g));
 	memset(sprite_bitmap, 0xff, sizeof(sprite_bitmap));
 	memset(sprite_row_pri, 0, sizeof(sprite_row_pri));
 	set_layer_offsets();
@@ -482,18 +488,19 @@ VIDEO_START( spi )
 
 *****************************************************************************/
 
-static INLINE UINT32 spi_alpha_blend(UINT32 d, UINT32 s)
+/* level 0x7f, as alpha_blend_r32 of MAME: (s * 0x7f + d * 0x81) >> 8 by */
+/* channel; red and blue together (each sum stays in its 16 bits), the */
+/* source parts of the pen computed once */
+static INLINE UINT32 spi_alpha_blend(UINT32 d, int pen)
 {
-	/* level 0x7f, as MAME */
-	return ((((s & 0x0000ff) * 0x7f + (d & 0x0000ff) * 0x81) >> 8)) |
-			((((s & 0x00ff00) * 0x7f + (d & 0x00ff00) * 0x81) >> 8) & 0x00ff00) |
-			((((s & 0xff0000) * 0x7f + (d & 0xff0000) * 0x81) >> 8) & 0xff0000);
+	return (((spi_pens_alpha_rb[pen] + (d & 0xff00ff) * 0x81) >> 8) & 0xff00ff) |
+			(((spi_pens_alpha_g[pen] + (d & 0x00ff00) * 0x81) >> 8) & 0x00ff00);
 }
 
 static INLINE void blend_pixel(UINT32 *dest, int pen)
 {
 	if (alpha_table[pen])
-		*dest = spi_alpha_blend(*dest, spi_pens[pen]);
+		*dest = spi_alpha_blend(*dest, pen);
 	else
 		*dest = spi_pens[pen];
 }
