@@ -1,4 +1,5 @@
 #include "driver.h"
+#include "state.h"
 #include <math.h>
 
 
@@ -104,6 +105,8 @@ int DAC_sh_start(const struct MachineSound *msound)
 			return 1;
 
 		output[i] = 0;
+		/* save states: the output level */
+		state_save_register_INT32("dac", i, "output", (INT32 *)&output[i], 1);
 	}
 
 	return 0;

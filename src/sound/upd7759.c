@@ -102,6 +102,7 @@
 #include <math.h>
 
 #include "driver.h"
+#include "state.h"
 #include "upd7759.h"
 #include "streams.h"
 
@@ -199,6 +200,61 @@ struct upd7759_chip
 *************************************************************/
 
 static struct upd7759_chip upd7759[MAX_UPD7759];
+
+/* save states: the chip state, and the ROM bank as an offset */
+static UINT32 upd7759_bank_offset[MAX_UPD7759];
+static int upd7759_saved;
+
+static void upd7759_presave(void)
+{
+	int i;
+
+	for (i = 0; i < upd7759_saved; i++)
+		upd7759_bank_offset[i] = upd7759[i].rombase ? (UINT32)(upd7759[i].rom - upd7759[i].rombase) : 0;
+}
+
+static void upd7759_postload(void)
+{
+	int i;
+
+	for (i = 0; i < upd7759_saved; i++)
+		if (upd7759[i].rombase)
+			upd7759[i].rom = upd7759[i].rombase + upd7759_bank_offset[i];
+}
+
+static void upd7759_save_state(int ch)
+{
+	struct upd7759_chip *chip = &upd7759[ch];
+
+	state_save_register_UINT32("upd7759", ch, "pos",          &chip->pos, 1);
+	state_save_register_UINT8 ("upd7759", ch, "fifo_in",      &chip->fifo_in, 1);
+	state_save_register_UINT8 ("upd7759", ch, "reset",        &chip->reset, 1);
+	state_save_register_UINT8 ("upd7759", ch, "start",        &chip->start, 1);
+	state_save_register_UINT8 ("upd7759", ch, "drq",          &chip->drq, 1);
+	state_save_register_INT32 ("upd7759", ch, "state",        (INT32 *)&chip->state, 1);
+	state_save_register_INT32 ("upd7759", ch, "clocks_left",  (INT32 *)&chip->clocks_left, 1);
+	state_save_register_INT32 ("upd7759", ch, "nibbles_left", (INT32 *)&chip->nibbles_left, 1);
+	state_save_register_INT32 ("upd7759", ch, "repeat_count", (INT32 *)&chip->repeat_count, 1);
+	state_save_register_INT32 ("upd7759", ch, "post_drq_state",  (INT32 *)&chip->post_drq_state, 1);
+	state_save_register_INT32 ("upd7759", ch, "post_drq_clocks", (INT32 *)&chip->post_drq_clocks, 1);
+	state_save_register_UINT8 ("upd7759", ch, "req_sample",   &chip->req_sample, 1);
+	state_save_register_UINT8 ("upd7759", ch, "last_sample",  &chip->last_sample, 1);
+	state_save_register_UINT8 ("upd7759", ch, "block_header", &chip->block_header, 1);
+	state_save_register_UINT8 ("upd7759", ch, "sample_rate",  &chip->sample_rate, 1);
+	state_save_register_UINT8 ("upd7759", ch, "first_valid_header", &chip->first_valid_header, 1);
+	state_save_register_UINT32("upd7759", ch, "offset",       &chip->offset, 1);
+	state_save_register_UINT32("upd7759", ch, "repeat_offset", &chip->repeat_offset, 1);
+	state_save_register_INT8  ("upd7759", ch, "adpcm_state",  &chip->adpcm_state, 1);
+	state_save_register_UINT8 ("upd7759", ch, "adpcm_data",   &chip->adpcm_data, 1);
+	state_save_register_INT16 ("upd7759", ch, "sample",       &chip->sample, 1);
+	state_save_register_UINT32("upd7759", ch, "bank",         &upd7759_bank_offset[ch], 1);
+	upd7759_saved = ch + 1;
+	if (ch == 0)
+	{
+		state_save_register_func_presave(upd7759_presave);
+		state_save_register_func_postload(upd7759_postload);
+	}
+}
 
 
 const static int upd7759_step[16][16] =
@@ -595,6 +651,7 @@ int upd7759_sh_start(const struct MachineSound *msound)
 		chip->start = 0;
 
 		upd7759_reset(ch);
+		upd7759_save_state(ch);
 	}
 	return 0;
 }

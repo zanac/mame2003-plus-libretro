@@ -48,6 +48,7 @@
  *****************************************************************************/
 
 #include "driver.h"
+#include "state.h"
 
 /*
  * Defining this produces much more (about twice as much)
@@ -662,6 +663,39 @@ int pokey_sh_start(const struct MachineSound *msound)
 			log_cb(RETRO_LOG_DEBUG, LOGPRE "failed to initialize sound channel\n");
             return 1;
 		}
+
+		/* save states: the counters, the poly and random indexes, the
+		   timers' periods and the registers */
+		state_save_register_INT32 ("pokey", chip, "counter",  p->counter, 4);
+		state_save_register_INT32 ("pokey", chip, "divisor",  p->divisor, 4);
+		state_save_register_UINT32("pokey", chip, "volume",   p->volume, 4);
+		state_save_register_UINT8 ("pokey", chip, "output",   p->output, 4);
+		state_save_register_UINT8 ("pokey", chip, "audible",  p->audible, 4);
+		state_save_register_UINT32("pokey", chip, "samplepos_fract", &p->samplepos_fract, 1);
+		state_save_register_UINT32("pokey", chip, "samplepos_whole", &p->samplepos_whole, 1);
+		state_save_register_UINT32("pokey", chip, "polyadjust", &p->polyadjust, 1);
+		state_save_register_UINT32("pokey", chip, "p4",       &p->p4, 1);
+		state_save_register_UINT32("pokey", chip, "p5",       &p->p5, 1);
+		state_save_register_UINT32("pokey", chip, "p9",       &p->p9, 1);
+		state_save_register_UINT32("pokey", chip, "p17",      &p->p17, 1);
+		state_save_register_UINT32("pokey", chip, "r9",       &p->r9, 1);
+		state_save_register_UINT32("pokey", chip, "r17",      &p->r17, 1);
+		state_save_register_UINT32("pokey", chip, "clockmult", &p->clockmult, 1);
+		state_save_register_double("pokey", chip, "timer_period", p->timer_period, 3);
+		state_save_register_INT32 ("pokey", chip, "timer_param", p->timer_param, 3);
+		state_save_register_UINT8 ("pokey", chip, "AUDF",     p->AUDF, 4);
+		state_save_register_UINT8 ("pokey", chip, "AUDC",     p->AUDC, 4);
+		state_save_register_UINT8 ("pokey", chip, "POTx",     p->POTx, 8);
+		state_save_register_UINT8 ("pokey", chip, "AUDCTL",   &p->AUDCTL, 1);
+		state_save_register_UINT8 ("pokey", chip, "ALLPOT",   &p->ALLPOT, 1);
+		state_save_register_UINT8 ("pokey", chip, "KBCODE",   &p->KBCODE, 1);
+		state_save_register_UINT8 ("pokey", chip, "RANDOM",   &p->RANDOM, 1);
+		state_save_register_UINT8 ("pokey", chip, "SERIN",    &p->SERIN, 1);
+		state_save_register_UINT8 ("pokey", chip, "SEROUT",   &p->SEROUT, 1);
+		state_save_register_UINT8 ("pokey", chip, "IRQST",    &p->IRQST, 1);
+		state_save_register_UINT8 ("pokey", chip, "IRQEN",    &p->IRQEN, 1);
+		state_save_register_UINT8 ("pokey", chip, "SKSTAT",   &p->SKSTAT, 1);
+		state_save_register_UINT8 ("pokey", chip, "SKCTL",    &p->SKCTL, 1);
 	}
 
     return 0;

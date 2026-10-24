@@ -35,6 +35,7 @@
 ***************************************************************************/
 
 #include "driver.h"
+#include "state.h"
 
 
 #define MAX_OUTPUT 0x7fff
@@ -301,6 +302,16 @@ static int SN76496_init(const struct MachineSound *msound,int chip,int clock,int
 
 	R->RNG = R->FeedbackMask;
 	R->Output[3] = R->RNG & 1;
+
+	/* save states: the registers, the counters and the noise generator */
+	state_save_register_INT32 ("sn76496", chip, "Register",     R->Register, 8);
+	state_save_register_INT32 ("sn76496", chip, "LastRegister", &R->LastRegister, 1);
+	state_save_register_INT32 ("sn76496", chip, "Volume",       R->Volume, 4);
+	state_save_register_UINT32("sn76496", chip, "RNG",          &R->RNG, 1);
+	state_save_register_INT32 ("sn76496", chip, "NoiseMode",    &R->NoiseMode, 1);
+	state_save_register_INT32 ("sn76496", chip, "Period",       R->Period, 4);
+	state_save_register_INT32 ("sn76496", chip, "Count",        R->Count, 4);
+	state_save_register_INT32 ("sn76496", chip, "Output",       R->Output, 4);
 
 	return 0;
 }

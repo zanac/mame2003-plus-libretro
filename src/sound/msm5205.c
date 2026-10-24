@@ -19,6 +19,7 @@
 #include <math.h>
 
 #include "driver.h"
+#include "state.h"
 #include "msm5205.h"
 
 /*
@@ -172,6 +173,16 @@ int MSM5205_sh_start (const struct MachineSound *msound)
                                 Machine->sample_rate,i,
 		                        MSM5205_update);
 		voice->timer = timer_alloc(MSM5205_vclk_callback);
+
+		/* save states: the pins and the ADPCM decoder (the VCLK timer is a
+		   MAME timer, in the timer state) */
+		state_save_register_INT32("msm5205", i, "data",      (INT32 *)&voice->data, 1);
+		state_save_register_INT32("msm5205", i, "vclk",      (INT32 *)&voice->vclk, 1);
+		state_save_register_INT32("msm5205", i, "reset",     (INT32 *)&voice->reset, 1);
+		state_save_register_INT32("msm5205", i, "prescaler", (INT32 *)&voice->prescaler, 1);
+		state_save_register_INT32("msm5205", i, "bitwidth",  (INT32 *)&voice->bitwidth, 1);
+		state_save_register_INT32("msm5205", i, "signal",    (INT32 *)&voice->signal, 1);
+		state_save_register_INT32("msm5205", i, "step",      (INT32 *)&voice->step, 1);
 	}
 	/* initialize */
 	MSM5205_sh_reset();
