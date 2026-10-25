@@ -417,7 +417,7 @@ static void gfx_upload_timing(UINT32 *addr)
 
 static void gfx_upload(UINT32 *addr)
 {
-	UINT32 dst_x_start, dst_y_start, dimx, dimy, x, y;
+	UINT32 dst_x_start, dst_y_start, dimx, dimy, x, y, cols;
 
 	*addr += 8;
 	dst_x_start = read_next_word(addr) & 0x1fff;
@@ -425,16 +425,33 @@ static void gfx_upload(UINT32 *addr)
 	dimx = (read_next_word(addr) & 0x1fff) + 1;
 	dimy = (read_next_word(addr) & 0x0fff) + 1;
 
+	/* the columns inside the VRAM; the others are read and dropped */
+	cols = (dst_x_start < VRAM_W) ? VRAM_W - dst_x_start : 0;
+	if (cols > dimx)
+		cols = dimx;
+
 	for (y = 0; y < dimy; y++)
 	{
-		UINT32 row = (dst_y_start + y) & (VRAM_H - 1);
-		for (x = 0; x < dimx; x++)
+		UINT16 *dst = &cv1k_vram[((dst_y_start + y) & (VRAM_H - 1)) * VRAM_W + dst_x_start];
+		UINT32 a = *addr & (cv1k_ram_size - 1);
+
+		/* VRAM is 1555 like the uploaded data */
+		if (a + dimx * 2 <= cv1k_ram_size)
 		{
-			const UINT16 pendat = read_next_word(addr);
-			UINT32 col = dst_x_start + x;
-			/* VRAM is 1555 like the uploaded data */
-			if (col < VRAM_W)
-				cv1k_vram[row * VRAM_W + col] = pendat;
+			/* the row doesn't wrap around the end of the RAM */
+			const UINT16 *ram = (const UINT16 *)cv1k_ram;
+			for (x = 0; x < cols; x++, a += 2)
+				dst[x] = ram[WORD_XOR_BE(a) >> 1];
+			*addr += dimx * 2;
+		}
+		else
+		{
+			for (x = 0; x < dimx; x++)
+			{
+				const UINT16 pendat = read_next_word(addr);
+				if (x < cols)
+					dst[x] = pendat;
+			}
 		}
 	}
 }
