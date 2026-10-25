@@ -946,6 +946,7 @@ static void tcr_w(int which, UINT16 data)
 #define REG_CHCR(ch)	(0x0400002c + (ch) * 0x10)
 #define REG_DMAOR		0x04000060
 
+static INLINE sh3_fastram *find_fastram(UINT32 a);
 static INLINE UINT8 read_byte(UINT32 a);
 static INLINE UINT16 read_word(UINT32 a);
 static INLINE UINT32 read_long(UINT32 a);
@@ -985,6 +986,25 @@ static void dma_transfer(int channel, UINT32 chcr, UINT32 src, UINT32 dst, UINT3
 	switch (size)
 	{
 		case 1:
+			/* to fast RAM, forward (the NAND page reads): the same stores
+			   without looking for the region of each byte */
+			if (incd == 1 && incs != 2)
+			{
+				sh3_fastram *fd = find_fastram(dst);
+				if (fd && !fd->readonly && dst + (count - 1) >= dst && dst + (count - 1) <= fd->end)
+				{
+					UINT8 *base = fd->base;
+					UINT32 start = fd->start;
+					for (; count > 0; count--)
+					{
+						base[BYTE4_XOR_BE(dst - start)] = read_byte(src & AM);
+						jit_check_write(dst);
+						if (incs == 1) src++;
+						dst++;
+					}
+					break;
+				}
+			}
 			for (; count > 0; count--)
 			{
 				if (incs == 2) src--;
