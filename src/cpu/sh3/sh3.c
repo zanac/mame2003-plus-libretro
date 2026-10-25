@@ -757,11 +757,8 @@ static INLINE UINT32 access_penalty_fast(UINT32 address, int write)
 	return access_penalty(address, write);
 }
 
-void sh3_update_access_cycles(UINT32 address, int write)
+static INLINE void update_access_cycles(UINT32 address, int write)
 {
-	if (!sh3.cache_timing)
-		return;
-
 	/* the instruction fetch, sampled at the data accesses */
 	if (is_cacheable(sh3.pc))
 	{
@@ -772,6 +769,13 @@ void sh3_update_access_cycles(UINT32 address, int write)
 	set_last_op_cycles(total_cycles());
 }
 
+void sh3_update_access_cycles(UINT32 address, int write)
+{
+	if (!sh3.cache_timing)
+		return;
+	update_access_cycles(address, write);
+}
+
 /* a data access of the recompiler: the address is the one of the last
    access below 0xe0000000 (current MAME doesn't store it for P4) */
 static INLINE void data_access_timing(UINT32 address, int write)
@@ -780,7 +784,7 @@ static INLINE void data_access_timing(UINT32 address, int write)
 		return;
 	if (address < 0xe0000000)
 		sh3.last_access_address = address;
-	sh3_update_access_cycles(sh3.last_access_address, write);
+	update_access_cycles(sh3.last_access_address, write);
 }
 
 /* CCR write with CF: invalidate the cache */
