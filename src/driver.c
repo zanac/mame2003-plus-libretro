@@ -3438,6 +3438,7 @@ Sep.1994 Quiz Ghost Hunter
 	DRIVER( bakubaku )
 	DRIVER( colmns97 )
 	DRIVER( cotton2 )
+	DRIVER( cotton2e )
 	DRIVER( cottonbm )
 	DRIVER( decathlt )
 	DRIVER( diehard )

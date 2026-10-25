@@ -4057,6 +4057,24 @@ ROM_START( cotton2 )
 	ROM_LOAD16_WORD_SWAP( "mpr20123.8",    0x1c00000, 0x0400000, CRC(35f1b89f) SHA1(1d6007c380f817def734fc3030d4fe56df4a15be) ) /* good */
 ROM_END
 
+/* English translation hack (bootleg): the story scenes, the ending, the
+   continue screen hints and the attract screens (prologue, character
+   profiles) in English, taken from the English translation of the Saturn
+   port. The scene before the last boss is still in Japanese. */
+ROM_START( cotton2e )
+	STV_BIOS
+
+	ROM_REGION32_BE( 0x2000000, REGION_USER1, ROMREGION_ERASEFF )
+	ROM_LOAD16_WORD_SWAP( "c2e20122.7",    0x0200000, 0x0200000, CRC(0b9d225c) SHA1(074777cf0d681e334ec7d3819a4e9cd86e258ad1) )
+	ROM_LOAD16_WORD_SWAP( "c2e20117.2",    0x0400000, 0x0400000, CRC(b6e0e634) SHA1(cad580d39a7bf666c55794d28788cb0f6503155d) )
+	ROM_LOAD16_WORD_SWAP( "c2e20118.3",    0x0800000, 0x0400000, CRC(645ab039) SHA1(648b883451e08efc0ce3383e3af95472ad05fd77) )
+	ROM_LOAD16_WORD_SWAP( "c2e20119.4",    0x0c00000, 0x0400000, CRC(c7e0165e) SHA1(918df5f590c968370f9df7209dd1c5f3e97157c9) )
+	ROM_LOAD16_WORD_SWAP( "c2e20120.5",    0x1000000, 0x0400000, CRC(988121dd) SHA1(176badb58896cecb5f5c9f31ed9e6fa096aef03f) )
+	ROM_LOAD16_WORD_SWAP( "c2e20121.6",    0x1400000, 0x0400000, CRC(b1b67426) SHA1(9bde1f45f758b70c1c7de61b8eb8e555f2170e66) )
+	ROM_LOAD16_WORD_SWAP( "c2e20116.1",    0x1800000, 0x0400000, CRC(65207eb8) SHA1(e0cbde50ceaf3c8c7162d2e708b0241887166d9a) )
+	ROM_LOAD16_WORD_SWAP( "c2e20123.8",    0x1c00000, 0x0400000, CRC(c33662ba) SHA1(fd44fadf41fdde1ba11bd477500bdfe09b066fbf) )
+ROM_END
+
 ROM_START( cottonbm )
 	STV_BIOS
 
@@ -5226,6 +5244,7 @@ GAMEBX( 1997, shienryu,  stvbios, stvbios, stv, stv,  shienryu,  ROT270, "Warash
 GAMEBX( 1995, mausuke,   stvbios, stvbios, stv, stv,  mausuke,   ROT0,   "Data East","Mausuke no Ojama the World", GAME_IMPERFECT_SOUND | GAME_IMPERFECT_GRAPHICS, &generic_ctrl, NULL )
 GAMEBX( 1996, puyosun,   stvbios, stvbios, stv, stv,  puyosun,   ROT0,   "Compile",  "Puyo Puyo Sun", GAME_IMPERFECT_SOUND | GAME_IMPERFECT_GRAPHICS, &generic_ctrl, NULL )
 GAMEBX( 1997, cotton2,   stvbios, stvbios, stv, stv,  cotton2,   ROT0,   "Success",  "Cotton 2", GAME_IMPERFECT_SOUND | GAME_IMPERFECT_GRAPHICS, &generic_ctrl, NULL )
+GAMEBX( 1997, cotton2e,  cotton2, stvbios, stv, stv,  cotton2,   ROT0,   "bootleg",  "Cotton 2 (English translation)", GAME_IMPERFECT_SOUND | GAME_IMPERFECT_GRAPHICS, &generic_ctrl, NULL )
 GAMEBX( 1998, cottonbm,  stvbios, stvbios, stv, stv,  cottonbm,  ROT0,   "Success",  "Cotton Boomerang", GAME_IMPERFECT_SOUND | GAME_IMPERFECT_GRAPHICS, &generic_ctrl, NULL )
 GAMEBX( 1996, vfkids,    stvbios, stvbios, stv, stv,  ic13,      ROT0,   "Sega", 	 "Virtua Fighter Kids", GAME_IMPERFECT_SOUND | GAME_IMPERFECT_GRAPHICS, &generic_ctrl, NULL )
 GAMEBX( 1995, ejihon,    stvbios, stvbios, stv, stv,  ic13,      ROT0,   "Sega", 	 "Ejihon Tantei Jimusyo", GAME_IMPERFECT_SOUND | GAME_IMPERFECT_GRAPHICS, &generic_ctrl, NULL )
