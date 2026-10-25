@@ -946,12 +946,12 @@ static void tcr_w(int which, UINT16 data)
 #define REG_CHCR(ch)	(0x0400002c + (ch) * 0x10)
 #define REG_DMAOR		0x04000060
 
-static UINT8 read_byte(UINT32 a);
-static UINT16 read_word(UINT32 a);
-static UINT32 read_long(UINT32 a);
-static void write_byte(UINT32 a, UINT8 d);
-static void write_word(UINT32 a, UINT16 d);
-static void write_long(UINT32 a, UINT32 d);
+static INLINE UINT8 read_byte(UINT32 a);
+static INLINE UINT16 read_word(UINT32 a);
+static INLINE UINT32 read_long(UINT32 a);
+static INLINE void write_byte(UINT32 a, UINT8 d);
+static INLINE void write_word(UINT32 a, UINT16 d);
+static INLINE void write_long(UINT32 a, UINT32 d);
 
 static void sh3_dma_callback(int channel)
 {
@@ -1377,17 +1377,25 @@ void sh3_set_fastram(UINT32 start, UINT32 end, int readonly, data32_t *base)
 	}
 }
 
+/* the regions don't overlap: the one of the previous access first */
+static int fastram_last;
+
 static INLINE sh3_fastram *find_fastram(UINT32 a)
 {
 	int i;
+	if (fastram_last < fastram_count && a >= fastram[fastram_last].start && a <= fastram[fastram_last].end)
+		return &fastram[fastram_last];
 	for (i = 0; i < fastram_count; i++)
 		if (a >= fastram[i].start && a <= fastram[i].end)
+		{
+			fastram_last = i;
 			return &fastram[i];
+		}
 	return NULL;
 }
 
 /* without the bus timing */
-static UINT8 read_byte(UINT32 a)
+static INLINE UINT8 read_byte(UINT32 a)
 {
 	sh3_fastram *f;
 	if (a >= 0xe0000000)
@@ -1401,7 +1409,7 @@ static UINT8 read_byte(UINT32 a)
 	return cpu_readmem32bedw(a);
 }
 
-static UINT16 read_word(UINT32 a)
+static INLINE UINT16 read_word(UINT32 a)
 {
 	sh3_fastram *f;
 	a &= ~1;
@@ -1416,7 +1424,7 @@ static UINT16 read_word(UINT32 a)
 	return cpu_readmem32bedw_word(a);
 }
 
-static UINT32 read_long(UINT32 a)
+static INLINE UINT32 read_long(UINT32 a)
 {
 	sh3_fastram *f;
 	a &= ~3;
@@ -1431,7 +1439,7 @@ static UINT32 read_long(UINT32 a)
 	return cpu_readmem32bedw_dword(a);
 }
 
-static void write_byte(UINT32 a, UINT8 d)
+static INLINE void write_byte(UINT32 a, UINT8 d)
 {
 	sh3_fastram *f;
 	if (a >= 0xe0000000)
@@ -1456,7 +1464,7 @@ static void write_byte(UINT32 a, UINT8 d)
 		cpu_writemem32bedw(a, d);
 }
 
-static void write_word(UINT32 a, UINT16 d)
+static INLINE void write_word(UINT32 a, UINT16 d)
 {
 	sh3_fastram *f;
 	a &= ~1;
@@ -1482,7 +1490,7 @@ static void write_word(UINT32 a, UINT16 d)
 		cpu_writemem32bedw_word(a, d);
 }
 
-static void write_long(UINT32 a, UINT32 d)
+static INLINE void write_long(UINT32 a, UINT32 d)
 {
 	sh3_fastram *f;
 	a &= ~3;
