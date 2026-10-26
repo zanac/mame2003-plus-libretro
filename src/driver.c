@@ -3460,6 +3460,7 @@ Sep.1994 Quiz Ghost Hunter
 	DRIVER( pblbeach )
 	DRIVER( prikura )
 	DRIVER( puyosun )
+	DRIVER( puyosune )	/* bootleg, English translation */
 	DRIVER( rsgun )
 	DRIVER( sandor )
 	DRIVER( thunt )
