@@ -2575,8 +2575,8 @@ static MACHINE_DRIVER_START( segac )
 	MDRV_CPU_MEMORY(readmem,writemem)
 	MDRV_CPU_VBLANK_INT(genesis_vblank_interrupt,1)
 
-	MDRV_FRAMES_PER_SECOND(60)
-	MDRV_VBLANK_DURATION((int)(((262. - 224.) / 262.) * 1000000. / 60.))
+	MDRV_FRAMES_PER_SECOND((double)XL2_CLOCK / 10.0 / 262.0 / 342.0)	/* 59.92 Hz, as in current MAME */
+	MDRV_VBLANK_DURATION((int)(((262. - 224.) / 262.) * 1000000. / ((double)XL2_CLOCK / 10.0 / 262.0 / 342.0)))
 
 	MDRV_MACHINE_INIT(segac2)
 	MDRV_NVRAM_HANDLER(segac2)

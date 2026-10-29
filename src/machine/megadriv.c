@@ -68,6 +68,13 @@ unsigned char *genesis_z80_ram;
    corrected HBLANK status bit of the VDP (segavdp_set_iack_mode) */
 static int genesis_vdp_iack;
 
+/* System C/C2: V-INT comes from the line that drives the Z80 interrupt on a
+   Mega Drive (not masked by the VDP register 1 enable, the usual V-INT line
+   isn't connected), H-INT as usual; both stay asserted until the 68000 takes
+   them, as in current MAME */
+static int c2_iack;
+static int genesis_irq_ack_callback(int irqline);
+
 /* call this whenever the interrupt state has changed */
 static void update_interrupts(void)
 {
@@ -75,7 +82,12 @@ static void update_interrupts(void)
 
 	/* determine which interrupt is active */
 	if (ym3438_int) level = 2;
-	if (genesis_vdp_iack)
+	if (c2_iack)
+	{
+		if (scanline_int) level = 4;
+		if (vblank_int) level = 6;
+	}
+	else if (genesis_vdp_iack)
 	{
 		/* Mega Play: a pending H-INT/V-INT only drives the line while it is
 		   enabled in VDP register 0/1, as on the real 315-5313 (Mazin Wars masks
@@ -116,7 +128,7 @@ static void vdp_reload_counter(int scanline)
 			scanline_int = 1;
 			update_interrupts();
 			/* with IACK emulation the line stays asserted until the 68000 takes it */
-			if (!genesis_vdp_iack)
+			if (!genesis_vdp_iack && !c2_iack)
 				timer_set(segavdp_scanlinetime(scanline + 1), 0, vdp_int4_off);
 		}
 
@@ -177,6 +189,8 @@ INTERRUPT_GEN( genesis_vblank_interrupt )
 	/* generate the interrupt */
 	vblank_int = 1;
 	update_interrupts();
+	if (c2_iack)
+		return;
 
 	/* set a timer to turn it off */
 	timer_set(segavdp_scanlineperiod() * (22. / 342.), 0, vdp_int6_off);
@@ -198,6 +212,10 @@ void megadriv_irq_init(const UINT8 *hint_mask)
 	genesis_vdp_iack = 0;
 	segavdp_set_iack_mode(0);
 	hint_mask_reg = hint_mask;
+	c2_iack = getenv("C2OLDIRQ") ? 0 : 1;
+	scanline_int = vblank_int = 0;
+	if (c2_iack)
+		cpu_set_irq_callback(0, genesis_irq_ack_callback);
 
 	/* set the first scanline 0 timer to go off */
 	timer_set(segavdp_scanlinetime(0) + segavdp_scanlineperiod() * (320. / 342.), 0, vdp_reload_counter);
@@ -217,6 +235,7 @@ static void genesis_state_register(void);
 MACHINE_INIT( genesis )
 {
 	genesis_vdp_iack = 0;
+	c2_iack = 0;
 	segavdp_set_iack_mode(0);
 	hint_mask_reg = NULL;
 
@@ -255,8 +274,16 @@ static int genesis_irq_ack_callback(int irqline)
 		vblank_int = 0;
 
 	if (ym3438_int) level = 2;
-	if (scanline_int && (segavdp_get_reg(0) & 0x10)) level = 4;
-	if (vblank_int && (segavdp_get_reg(1) & 0x20)) level = 6;
+	if (c2_iack)
+	{
+		if (scanline_int) level = 4;
+		if (vblank_int) level = 6;
+	}
+	else
+	{
+		if (scanline_int && (segavdp_get_reg(0) & 0x10)) level = 4;
+		if (vblank_int && (segavdp_get_reg(1) & 0x20)) level = 6;
+	}
 
 	/* drop the line now (an immediate clear cannot re-enter the CPU core),
 	   then re-assert whatever is still pending */
