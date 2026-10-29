@@ -52,7 +52,11 @@ static UINT8 hintcount;			/* line interrupt counter, decreased each scanline */
 static INTERRUPT_GEN( megaplay_bios_irq )
 {
 	int sline;
-	sline = 261 - cpu_getiloops();
+	/* the 262 calls start at the Mega Drive VBLANK (line 224); the BIOS
+	   VDP shares the screen and raises its V-INT (its line 193) about
+	   12 lines later, as in current MAME. Counting from the VBLANK put it
+	   ~80 lines early, and the BIOS/game handshake on port C could miss. */
+	sline = (261 - cpu_getiloops() + 181) % 262;
 
 	if (sline ==0) {
 		hintcount = segae_vdp_regs[0][10];
