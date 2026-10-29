@@ -212,10 +212,9 @@ void megadriv_irq_init(const UINT8 *hint_mask)
 	genesis_vdp_iack = 0;
 	segavdp_set_iack_mode(0);
 	hint_mask_reg = hint_mask;
-	c2_iack = getenv("C2OLDIRQ") ? 0 : 1;
+	c2_iack = 1;
 	scanline_int = vblank_int = 0;
-	if (c2_iack)
-		cpu_set_irq_callback(0, genesis_irq_ack_callback);
+	cpu_set_irq_callback(0, genesis_irq_ack_callback);
 
 	/* set the first scanline 0 timer to go off */
 	timer_set(segavdp_scanlinetime(0) + segavdp_scanlineperiod() * (320. / 342.), 0, vdp_reload_counter);
