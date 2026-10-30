@@ -12,6 +12,7 @@
 ***************************************************************************/
 
 #include "driver.h"
+#include "cpu/m68000/m68k.h"
 #include "cpu/m68000/m68000.h"
 #include "state.h"
 #include "megadriv.h"
@@ -21,11 +22,11 @@
 
 /* interrupt states */
 static UINT8		ym3438_int;			/* INT2 - from YM3438 */
-static UINT8		scanline_int;		/* INT4 - programmable */
+static UINT8		scanline_int;		/* INT4 - programmable (System C/C2: the VDP H-INT pending flag) */
+static UINT8		c2_hint_line;		/* System C/C2: the VDP H-INT output to the 68000 */
 static UINT8		vblank_int;			/* INT6 - on every VBLANK */
 
 /* System C/C2: bit 4 of I/O port H masks the H-INT (NULL on the other boards) */
-static const UINT8 *hint_mask_reg;
 
 /* the sound Z80 */
 static unsigned int	z80_68000_latch;
@@ -84,7 +85,7 @@ static void update_interrupts(void)
 	if (ym3438_int) level = 2;
 	if (c2_iack)
 	{
-		if (scanline_int) level = 4;
+		if (c2_hint_line) level = 4;
 		if (vblank_int) level = 6;
 	}
 	else if (genesis_vdp_iack)
@@ -118,30 +119,68 @@ static void vdp_int4_off(int param)
 }
 
 
-/* timer callback to handle reloading the H counter and generate IRQ4 */
-static void vdp_reload_counter(int scanline)
+/* the H-INT counter of the VDP, as in current MAME: it counts down on lines
+   0-224 and raises H-INT when it goes past 0, then restarts from register
+   10; on the other lines it is reloaded from register 10 */
+static int hint_counter;
+
+/* H-INT of a line is raised in the horizontal blanking before it, at the
+   end of the active display of the previous line, where the V counter
+   already reads the new line (vidhrdw/segavdp.c): the game sees the line
+   number current MAME gives at the start of the line, and the colors and
+   scroll values it writes there apply from that line */
+static double hint_time(int scanline)
 {
-	/* generate an int if they're enabled */
-	if ((segavdp_get_reg(0) & 0x10) && !(hint_mask_reg && (*hint_mask_reg & 0x10)))
-		if (scanline != 0 || segavdp_get_reg(10) == 0)
+	/* from now: the start of the line minus the 22 pixels of its blanking
+	   (cpu_getscanlinetime gives the next time the line starts) */
+	return segavdp_scanlinetime(scanline) - segavdp_scanlineperiod() * (22. / 342.);
+}
+
+/* one line of the H-INT counter */
+static void hint_count_line(int scanline)
+{
+	if (scanline <= 224)
+	{
+		if (--hint_counter < 0)
 		{
-			scanline_int = 1;
-			update_interrupts();
-			/* with IACK emulation the line stays asserted until the 68000 takes it */
-			if (!genesis_vdp_iack && !c2_iack)
-				timer_set(segavdp_scanlinetime(scanline + 1), 0, vdp_int4_off);
+			hint_counter = segavdp_get_reg(10);
+
+			/* System C/C2, as current MAME: the counter sets the pending flag
+			   even while H-INT is disabled; the line follows the enable */
+			if (c2_iack)
+			{
+				scanline_int = 1;
+				if (segavdp_get_reg(0) & 0x10)
+				{
+					c2_hint_line = 1;
+					update_interrupts();
+				}
+			}
+			else if (segavdp_get_reg(0) & 0x10)
+			{
+				scanline_int = 1;
+				update_interrupts();
+				/* with IACK emulation the line stays asserted until the 68000 takes it */
+				if (!genesis_vdp_iack && !c2_iack)
+					timer_set(segavdp_scanlinetime(scanline + 1), 0, vdp_int4_off);
+			}
 		}
+	}
+	else
+		hint_counter = segavdp_get_reg(10);
+}
 
-	/* advance to the next scanline */
-	/* behavior 2: 0 count means interrupt after one scanline */
-	/* (this behavior matches the Sega C2 emulator) */
-	/* (in this case the vidhrdw ichidant kludge should be -2) */
-	scanline += segavdp_get_reg(10) + 1;
-	if (scanline >= 224)
-		scanline = 0;
+/* timer callback, once per line */
+static void vdp_hint_line(int scanline)
+{
+	/* the line starts: sprite collision as MAME computes it while rendering */
+	segavdp_sprite_line(scanline);
 
-	/* set a timer */
-	timer_set(segavdp_scanlinetime(scanline) + segavdp_scanlineperiod() * (320. / 342.), scanline, vdp_reload_counter);
+	hint_count_line(scanline);
+
+	/* next line (the last line of the frame is followed by line 0) */
+	scanline = (scanline + 1) % 262;
+	timer_set(hint_time(scanline), scanline, vdp_hint_line);
 }
 
 
@@ -149,6 +188,7 @@ static void vdp_reload_counter(int scanline)
 static void vdp_int6_off(int param)
 {
 	vblank_int = 0;
+	segavdp_irq6_ack();
 	update_interrupts();
 }
 
@@ -162,15 +202,46 @@ static void genesis_vint_delayed(int param)
 	update_interrupts();
 }
 
-/* called by the VDP after a write to R0/R1 (Mega Play only) */
+/* System C/C2: H-INT enabled while pending, raised 16 VDP clocks later */
+static void c2_hint_on(int param)
+{
+	if (scanline_int && (segavdp_get_reg(0) & 0x10))
+	{
+		c2_hint_line = 1;
+		update_interrupts();
+	}
+}
+
+/* called by the VDP after a write to R0/R1 */
 void megadriv_vdp_irq_update(void)
 {
 	if (genesis_vdp_iack)
 		update_interrupts();
+	else if (c2_iack)
+	{
+		/* as current MAME: enabling H-INT with the pending flag set raises it
+		   16 VDP clocks (64 master clocks) later; disabling drops the line,
+		   the pending flag stays */
+		if (segavdp_get_reg(0) & 0x10)
+		{
+			if (scanline_int && !c2_hint_line)
+				timer_set(TIME_IN_SEC(64.0 / 53693175.0), 0, c2_hint_on);
+		}
+		else if (c2_hint_line)
+		{
+			c2_hint_line = 0;
+			update_interrupts();
+		}
+	}
 }
 
 INTERRUPT_GEN( genesis_vblank_interrupt )
 {
+	/* VBLANK starts: the visible lines are all displayed (current MAME draws
+	   each line as it goes; the screen update here comes at the end of the
+	   frame, after the VRAM writes of the VBLANK period) */
+	force_partial_update(Machine->visible_area.max_y);
+
 	/* with IACK emulation V-INT stays pending until the 68000 takes it, so it
 	   is not lost while an H-INT handler has the interrupts masked; as on the
 	   real 315-5313 it only drives the 68000 while enabled in VDP register 1 */
@@ -206,18 +277,41 @@ void megadriv_ym3438_irq(int state)
 
 
 /* System C/C2: the interrupts of the board at reset */
-void megadriv_irq_init(const UINT8 *hint_mask)
+/* System C/C2 power on: current MAME starts at the beginning of VBLANK, here
+   the frame starts at line 0 and the 68000 runs at twice its clock for the
+   first boot_lines lines to catch up (drivers/segac2.c). Those lines hold
+   2 x boot_lines lines of the MAME frame, from line 224 on, and the H-INT
+   counter runs through them as in MAME: reloaded in VBLANK, counting from
+   line 0. */
+static int c2_boot_lines;
+
+static void vdp_hint_boot(int i)
+{
+	hint_count_line((224 + i) % 262);
+	if (++i < 2 * c2_boot_lines)
+		timer_set(segavdp_scanlineperiod() / 2, i, vdp_hint_boot);
+	else
+		timer_set(hint_time(c2_boot_lines), c2_boot_lines, vdp_hint_line);
+}
+
+void megadriv_irq_init(int boot_lines)
 {
 	/* the Mega Play interrupt acknowledge is not used here */
 	genesis_vdp_iack = 0;
 	segavdp_set_iack_mode(0);
-	hint_mask_reg = hint_mask;
 	c2_iack = 1;
-	scanline_int = vblank_int = 0;
+	scanline_int = vblank_int = c2_hint_line = 0;
 	cpu_set_irq_callback(0, genesis_irq_ack_callback);
 
 	/* set the first scanline 0 timer to go off */
-	timer_set(segavdp_scanlinetime(0) + segavdp_scanlineperiod() * (320. / 342.), 0, vdp_reload_counter);
+	hint_counter = segavdp_get_reg(10);
+	if (boot_lines > 0)
+	{
+		c2_boot_lines = boot_lines;
+		timer_set(segavdp_scanlineperiod() * 0.4, 0, vdp_hint_boot);
+	}
+	else
+		timer_set(hint_time(1), 1, vdp_hint_line);
 }
 
 /* the interrupt states, saved by every board */
@@ -225,7 +319,9 @@ void megadriv_irq_state_register(void)
 {
 	state_save_register_UINT8 ("C2_main", 0, "Int 2 Status", &ym3438_int, 1);
 	state_save_register_UINT8 ("C2_main", 0, "Int 4 Status", &scanline_int, 1);
+	state_save_register_UINT8 ("C2_main", 0, "Int 4 Line", &c2_hint_line, 1);
 	state_save_register_UINT8 ("C2_main", 0, "Int 6 Status", &vblank_int, 1);
+	state_save_register_int   ("C2_main", 0, "H-INT counter", &hint_counter);
 }
 
 
@@ -236,7 +332,6 @@ MACHINE_INIT( genesis )
 	genesis_vdp_iack = 0;
 	c2_iack = 0;
 	segavdp_set_iack_mode(0);
-	hint_mask_reg = NULL;
 
 	/* the Mega Drive, Mega-Tech and Mega Play state (repeated registrations are ignored) */
 	genesis_state_register();
@@ -251,7 +346,8 @@ MACHINE_INIT( genesis )
 	z80running = 0;
 	log_cb(RETRO_LOG_DEBUG, LOGPRE "Machine init\n");
 
-	timer_set(segavdp_scanlinetime(0) + segavdp_scanlineperiod() * (320. / 342.), 0, vdp_reload_counter);
+	hint_counter = segavdp_get_reg(10);
+	timer_set(hint_time(1), 1, vdp_hint_line);
 
 }
 
@@ -267,15 +363,46 @@ static int genesis_irq_ack_callback(int irqline)
 {
 	int level = 0;
 
-	if (irqline == 4)
+	if (c2_iack)
+	{
+		/* as current MAME: the H-INT acknowledge goes to the VDP, which clears
+		   its V-INT pending flag first if V-INT is enabled there, otherwise the
+		   H-INT one; the V-INT of the board is not acknowledged by the VDP */
+		if (irqline == 4)
+		{
+			if (segavdp_irq6_pending() && (segavdp_get_reg(1) & 0x20))
+				segavdp_irq6_ack();
+			else if (scanline_int && (segavdp_get_reg(0) & 0x10))
+				scanline_int = c2_hint_line = 0;
+		}
+		else if (irqline == 6)
+			vblank_int = 0;
+	}
+	else if (irqline == 4)
 		scanline_int = 0;
 	else if (irqline == 6)
+	{
 		vblank_int = 0;
+		segavdp_irq6_ack();
+	}
+
+	/* System C/C2: the autovector acknowledge waits for the 68000 E clock
+	   (VPA), as in current MAME: the IACK cycle starts 11 clocks into the
+	   exception and waits for the next E clock edge (one every 10 CPU clocks,
+	   at least 3 clocks away); the exception ends 35 clocks after the edge,
+	   2 more than the 44 of the Musashi table. The interrupt is usually taken
+	   between two timeslices, where activecpu_gettotalcycles() is not valid:
+	   the CPU's own cycle count gives the time of the exception. */
+	if (c2_iack)
+	{
+		int phase = (int)((cpu_gettotalcycles64(0) + 11) % 10);
+		m68k_add_int_cycles((phase < 7 ? 10 - phase : 20 - phase) + 2);
+	}
 
 	if (ym3438_int) level = 2;
 	if (c2_iack)
 	{
-		if (scanline_int) level = 4;
+		if (c2_hint_line) level = 4;
 		if (vblank_int) level = 6;
 	}
 	else
@@ -298,7 +425,7 @@ void genesis_enable_iack(void)
 {
 	genesis_vdp_iack = 1;
 	segavdp_set_iack_mode(1);
-	scanline_int = vblank_int = 0;
+	scanline_int = vblank_int = c2_hint_line = 0;
 	cpu_set_irq_callback(0, genesis_irq_ack_callback);
 }
 

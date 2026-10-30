@@ -18,7 +18,7 @@
 INTERRUPT_GEN( genesis_vblank_interrupt );
 void megadriv_ym3438_irq(int state);
 void megadriv_vdp_irq_update(void);
-void megadriv_irq_init(const UINT8 *hint_mask);
+void megadriv_irq_init(int boot_lines);
 void megadriv_irq_state_register(void);
 void genesis_enable_iack(void);
 

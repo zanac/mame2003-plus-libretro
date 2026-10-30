@@ -29,6 +29,12 @@ struct segavdp_interface
 	int		display_enable;		/* initial state of the board display enable */
 	int		set_visible_area;	/* register 12 (H32/H40) resizes the screen */
 	void	(*irq_update)(void);	/* called after a write to register 0 or 1, or NULL */
+	int		shadow_base;		/* shadow/highlight mode (register 12 bit 3): offsets of the
+								   shadow and highlight colors from the normal ones, set by
+								   the user; 0 = not supported (the old operator sprites) */
+	int		hilite_base;
+	int		black_pen;			/* palette entry of black (the board blanks the display),
+								   -1 = get_black_pen() */
 };
 
 int  segavdp_start(const struct segavdp_interface *intf);
@@ -41,6 +47,10 @@ WRITE16_HANDLER( segavdp_w );
    and ends it at scanline 0; segavdp_set_vblank() raises the flag early */
 void segavdp_eof(void);
 void segavdp_set_vblank(void);
+int segavdp_irq6_pending(void);
+void segavdp_set_black_pen(int pen);	/* status bit 7 */
+void segavdp_irq6_ack(void);	/* the 68000 acknowledged V-INT */
+void segavdp_sprite_line(int line);	/* sprite collision (status bit 5) for one line */
 
 /* Mega Play: the H-INT/V-INT are acknowledged by the 68000, and the HBLANK
    status bit covers the end of the line in H40 mode too */
@@ -48,6 +58,8 @@ void segavdp_set_iack_mode(int enable);
 
 /* board controls */
 void segavdp_enable_display(int enable);
+void segavdp_update_before_line(void);
+int segavdp_drawn_line(void);	/* the last line already drawn */	/* draw the lines before the current one */
 void segavdp_set_palbases(int bg_palbase, int sp_palbase);
 int  segavdp_get_bg_palbase(void);
 int  segavdp_get_sp_palbase(void);

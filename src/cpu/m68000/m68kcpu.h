@@ -750,6 +750,12 @@ static INLINE sint MAKE_INT_32(uint value)
 
 #define ADD_CYCLES(A)    m68ki_remaining_cycles += (A)
 #define USE_CYCLES(A)    m68ki_remaining_cycles -= (A)
+
+/* 68000 MULU/MULS: 38 + 2n clocks plus the effective address, n = the 1 bits
+   of the source (MULU) or the 01/10 pairs of the source with a 0 below it
+   (MULS); the tables have the 54 clocks of n = 8 */
+#define m68ki_mulu_timing(SRC) do { if(CPU_TYPE_IS_000(CPU_TYPE)) { uint mt_ = (SRC) & 0xffff, mn_ = 0; while(mt_) { mn_ += mt_ & 1; mt_ >>= 1; } USE_CYCLES((int)(2 * mn_) - 16); } } while(0)
+#define m68ki_muls_timing(SRC) do { if(CPU_TYPE_IS_000(CPU_TYPE)) { uint mt_ = ((SRC) << 1) & 0x1ffff, mn_ = 0; mt_ = (mt_ ^ (mt_ >> 1)) & 0xffff; while(mt_) { mn_ += mt_ & 1; mt_ >>= 1; } USE_CYCLES((int)(2 * mn_) - 16); } } while(0)
 #define SET_CYCLES(A)    m68ki_remaining_cycles = A
 #define GET_CYCLES()     m68ki_remaining_cycles
 #define USE_ALL_CYCLES() m68ki_remaining_cycles %= CYC_INSTRUCTION[REG_IR]

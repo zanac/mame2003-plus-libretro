@@ -11547,7 +11547,8 @@ void m68k_op_moveq_32(void)
 void m68k_op_muls_16_d(void)
 {
 	uint* r_dst = &DX;
-	uint res = MASK_OUT_ABOVE_32(MAKE_INT_16(DY) * MAKE_INT_16(MASK_OUT_ABOVE_16(*r_dst)));
+	uint src = MASK_OUT_ABOVE_16(DY);
+	uint res = MASK_OUT_ABOVE_32(MAKE_INT_16(src) * MAKE_INT_16(MASK_OUT_ABOVE_16(*r_dst)));
 
 	*r_dst = res;
 
@@ -11555,13 +11556,15 @@ void m68k_op_muls_16_d(void)
 	FLAG_N = NFLAG_32(res);
 	FLAG_V = VFLAG_CLEAR;
 	FLAG_C = CFLAG_CLEAR;
+	m68ki_muls_timing(src);
 }
 
 
 void m68k_op_muls_16_ai(void)
 {
 	uint* r_dst = &DX;
-	uint res = MASK_OUT_ABOVE_32(MAKE_INT_16(OPER_AY_AI_16()) * MAKE_INT_16(MASK_OUT_ABOVE_16(*r_dst)));
+	uint src = OPER_AY_AI_16();
+	uint res = MASK_OUT_ABOVE_32(MAKE_INT_16(src) * MAKE_INT_16(MASK_OUT_ABOVE_16(*r_dst)));
 
 	*r_dst = res;
 
@@ -11569,13 +11572,15 @@ void m68k_op_muls_16_ai(void)
 	FLAG_N = NFLAG_32(res);
 	FLAG_V = VFLAG_CLEAR;
 	FLAG_C = CFLAG_CLEAR;
+	m68ki_muls_timing(src);
 }
 
 
 void m68k_op_muls_16_pi(void)
 {
 	uint* r_dst = &DX;
-	uint res = MASK_OUT_ABOVE_32(MAKE_INT_16(OPER_AY_PI_16()) * MAKE_INT_16(MASK_OUT_ABOVE_16(*r_dst)));
+	uint src = OPER_AY_PI_16();
+	uint res = MASK_OUT_ABOVE_32(MAKE_INT_16(src) * MAKE_INT_16(MASK_OUT_ABOVE_16(*r_dst)));
 
 	*r_dst = res;
 
@@ -11583,13 +11588,15 @@ void m68k_op_muls_16_pi(void)
 	FLAG_N = NFLAG_32(res);
 	FLAG_V = VFLAG_CLEAR;
 	FLAG_C = CFLAG_CLEAR;
+	m68ki_muls_timing(src);
 }
 
 
 void m68k_op_muls_16_pd(void)
 {
 	uint* r_dst = &DX;
-	uint res = MASK_OUT_ABOVE_32(MAKE_INT_16(OPER_AY_PD_16()) * MAKE_INT_16(MASK_OUT_ABOVE_16(*r_dst)));
+	uint src = OPER_AY_PD_16();
+	uint res = MASK_OUT_ABOVE_32(MAKE_INT_16(src) * MAKE_INT_16(MASK_OUT_ABOVE_16(*r_dst)));
 
 	*r_dst = res;
 
@@ -11597,13 +11604,15 @@ void m68k_op_muls_16_pd(void)
 	FLAG_N = NFLAG_32(res);
 	FLAG_V = VFLAG_CLEAR;
 	FLAG_C = CFLAG_CLEAR;
+	m68ki_muls_timing(src);
 }
 
 
 void m68k_op_muls_16_di(void)
 {
 	uint* r_dst = &DX;
-	uint res = MASK_OUT_ABOVE_32(MAKE_INT_16(OPER_AY_DI_16()) * MAKE_INT_16(MASK_OUT_ABOVE_16(*r_dst)));
+	uint src = OPER_AY_DI_16();
+	uint res = MASK_OUT_ABOVE_32(MAKE_INT_16(src) * MAKE_INT_16(MASK_OUT_ABOVE_16(*r_dst)));
 
 	*r_dst = res;
 
@@ -11611,13 +11620,15 @@ void m68k_op_muls_16_di(void)
 	FLAG_N = NFLAG_32(res);
 	FLAG_V = VFLAG_CLEAR;
 	FLAG_C = CFLAG_CLEAR;
+	m68ki_muls_timing(src);
 }
 
 
 void m68k_op_muls_16_ix(void)
 {
 	uint* r_dst = &DX;
-	uint res = MASK_OUT_ABOVE_32(MAKE_INT_16(OPER_AY_IX_16()) * MAKE_INT_16(MASK_OUT_ABOVE_16(*r_dst)));
+	uint src = OPER_AY_IX_16();
+	uint res = MASK_OUT_ABOVE_32(MAKE_INT_16(src) * MAKE_INT_16(MASK_OUT_ABOVE_16(*r_dst)));
 
 	*r_dst = res;
 
@@ -11625,13 +11636,15 @@ void m68k_op_muls_16_ix(void)
 	FLAG_N = NFLAG_32(res);
 	FLAG_V = VFLAG_CLEAR;
 	FLAG_C = CFLAG_CLEAR;
+	m68ki_muls_timing(src);
 }
 
 
 void m68k_op_muls_16_aw(void)
 {
 	uint* r_dst = &DX;
-	uint res = MASK_OUT_ABOVE_32(MAKE_INT_16(OPER_AW_16()) * MAKE_INT_16(MASK_OUT_ABOVE_16(*r_dst)));
+	uint src = OPER_AW_16();
+	uint res = MASK_OUT_ABOVE_32(MAKE_INT_16(src) * MAKE_INT_16(MASK_OUT_ABOVE_16(*r_dst)));
 
 	*r_dst = res;
 
@@ -11639,13 +11652,15 @@ void m68k_op_muls_16_aw(void)
 	FLAG_N = NFLAG_32(res);
 	FLAG_V = VFLAG_CLEAR;
 	FLAG_C = CFLAG_CLEAR;
+	m68ki_muls_timing(src);
 }
 
 
 void m68k_op_muls_16_al(void)
 {
 	uint* r_dst = &DX;
-	uint res = MASK_OUT_ABOVE_32(MAKE_INT_16(OPER_AL_16()) * MAKE_INT_16(MASK_OUT_ABOVE_16(*r_dst)));
+	uint src = OPER_AL_16();
+	uint res = MASK_OUT_ABOVE_32(MAKE_INT_16(src) * MAKE_INT_16(MASK_OUT_ABOVE_16(*r_dst)));
 
 	*r_dst = res;
 
@@ -11653,13 +11668,15 @@ void m68k_op_muls_16_al(void)
 	FLAG_N = NFLAG_32(res);
 	FLAG_V = VFLAG_CLEAR;
 	FLAG_C = CFLAG_CLEAR;
+	m68ki_muls_timing(src);
 }
 
 
 void m68k_op_muls_16_pcdi(void)
 {
 	uint* r_dst = &DX;
-	uint res = MASK_OUT_ABOVE_32(MAKE_INT_16(OPER_PCDI_16()) * MAKE_INT_16(MASK_OUT_ABOVE_16(*r_dst)));
+	uint src = OPER_PCDI_16();
+	uint res = MASK_OUT_ABOVE_32(MAKE_INT_16(src) * MAKE_INT_16(MASK_OUT_ABOVE_16(*r_dst)));
 
 	*r_dst = res;
 
@@ -11667,13 +11684,15 @@ void m68k_op_muls_16_pcdi(void)
 	FLAG_N = NFLAG_32(res);
 	FLAG_V = VFLAG_CLEAR;
 	FLAG_C = CFLAG_CLEAR;
+	m68ki_muls_timing(src);
 }
 
 
 void m68k_op_muls_16_pcix(void)
 {
 	uint* r_dst = &DX;
-	uint res = MASK_OUT_ABOVE_32(MAKE_INT_16(OPER_PCIX_16()) * MAKE_INT_16(MASK_OUT_ABOVE_16(*r_dst)));
+	uint src = OPER_PCIX_16();
+	uint res = MASK_OUT_ABOVE_32(MAKE_INT_16(src) * MAKE_INT_16(MASK_OUT_ABOVE_16(*r_dst)));
 
 	*r_dst = res;
 
@@ -11681,13 +11700,15 @@ void m68k_op_muls_16_pcix(void)
 	FLAG_N = NFLAG_32(res);
 	FLAG_V = VFLAG_CLEAR;
 	FLAG_C = CFLAG_CLEAR;
+	m68ki_muls_timing(src);
 }
 
 
 void m68k_op_muls_16_i(void)
 {
 	uint* r_dst = &DX;
-	uint res = MASK_OUT_ABOVE_32(MAKE_INT_16(OPER_I_16()) * MAKE_INT_16(MASK_OUT_ABOVE_16(*r_dst)));
+	uint src = OPER_I_16();
+	uint res = MASK_OUT_ABOVE_32(MAKE_INT_16(src) * MAKE_INT_16(MASK_OUT_ABOVE_16(*r_dst)));
 
 	*r_dst = res;
 
@@ -11695,13 +11716,15 @@ void m68k_op_muls_16_i(void)
 	FLAG_N = NFLAG_32(res);
 	FLAG_V = VFLAG_CLEAR;
 	FLAG_C = CFLAG_CLEAR;
+	m68ki_muls_timing(src);
 }
 
 
 void m68k_op_mulu_16_d(void)
 {
 	uint* r_dst = &DX;
-	uint res = MASK_OUT_ABOVE_16(DY) * MASK_OUT_ABOVE_16(*r_dst);
+	uint src = MASK_OUT_ABOVE_16(DY);
+	uint res = src * MASK_OUT_ABOVE_16(*r_dst);
 
 	*r_dst = res;
 
@@ -11709,13 +11732,15 @@ void m68k_op_mulu_16_d(void)
 	FLAG_N = NFLAG_32(res);
 	FLAG_V = VFLAG_CLEAR;
 	FLAG_C = CFLAG_CLEAR;
+	m68ki_mulu_timing(src);
 }
 
 
 void m68k_op_mulu_16_ai(void)
 {
 	uint* r_dst = &DX;
-	uint res = OPER_AY_AI_16() * MASK_OUT_ABOVE_16(*r_dst);
+	uint src = OPER_AY_AI_16();
+	uint res = src * MASK_OUT_ABOVE_16(*r_dst);
 
 	*r_dst = res;
 
@@ -11723,13 +11748,15 @@ void m68k_op_mulu_16_ai(void)
 	FLAG_N = NFLAG_32(res);
 	FLAG_V = VFLAG_CLEAR;
 	FLAG_C = CFLAG_CLEAR;
+	m68ki_mulu_timing(src);
 }
 
 
 void m68k_op_mulu_16_pi(void)
 {
 	uint* r_dst = &DX;
-	uint res = OPER_AY_PI_16() * MASK_OUT_ABOVE_16(*r_dst);
+	uint src = OPER_AY_PI_16();
+	uint res = src * MASK_OUT_ABOVE_16(*r_dst);
 
 	*r_dst = res;
 
@@ -11737,13 +11764,15 @@ void m68k_op_mulu_16_pi(void)
 	FLAG_N = NFLAG_32(res);
 	FLAG_V = VFLAG_CLEAR;
 	FLAG_C = CFLAG_CLEAR;
+	m68ki_mulu_timing(src);
 }
 
 
 void m68k_op_mulu_16_pd(void)
 {
 	uint* r_dst = &DX;
-	uint res = OPER_AY_PD_16() * MASK_OUT_ABOVE_16(*r_dst);
+	uint src = OPER_AY_PD_16();
+	uint res = src * MASK_OUT_ABOVE_16(*r_dst);
 
 	*r_dst = res;
 
@@ -11751,13 +11780,15 @@ void m68k_op_mulu_16_pd(void)
 	FLAG_N = NFLAG_32(res);
 	FLAG_V = VFLAG_CLEAR;
 	FLAG_C = CFLAG_CLEAR;
+	m68ki_mulu_timing(src);
 }
 
 
 void m68k_op_mulu_16_di(void)
 {
 	uint* r_dst = &DX;
-	uint res = OPER_AY_DI_16() * MASK_OUT_ABOVE_16(*r_dst);
+	uint src = OPER_AY_DI_16();
+	uint res = src * MASK_OUT_ABOVE_16(*r_dst);
 
 	*r_dst = res;
 
@@ -11765,13 +11796,15 @@ void m68k_op_mulu_16_di(void)
 	FLAG_N = NFLAG_32(res);
 	FLAG_V = VFLAG_CLEAR;
 	FLAG_C = CFLAG_CLEAR;
+	m68ki_mulu_timing(src);
 }
 
 
 void m68k_op_mulu_16_ix(void)
 {
 	uint* r_dst = &DX;
-	uint res = OPER_AY_IX_16() * MASK_OUT_ABOVE_16(*r_dst);
+	uint src = OPER_AY_IX_16();
+	uint res = src * MASK_OUT_ABOVE_16(*r_dst);
 
 	*r_dst = res;
 
@@ -11779,13 +11812,15 @@ void m68k_op_mulu_16_ix(void)
 	FLAG_N = NFLAG_32(res);
 	FLAG_V = VFLAG_CLEAR;
 	FLAG_C = CFLAG_CLEAR;
+	m68ki_mulu_timing(src);
 }
 
 
 void m68k_op_mulu_16_aw(void)
 {
 	uint* r_dst = &DX;
-	uint res = OPER_AW_16() * MASK_OUT_ABOVE_16(*r_dst);
+	uint src = OPER_AW_16();
+	uint res = src * MASK_OUT_ABOVE_16(*r_dst);
 
 	*r_dst = res;
 
@@ -11793,13 +11828,15 @@ void m68k_op_mulu_16_aw(void)
 	FLAG_N = NFLAG_32(res);
 	FLAG_V = VFLAG_CLEAR;
 	FLAG_C = CFLAG_CLEAR;
+	m68ki_mulu_timing(src);
 }
 
 
 void m68k_op_mulu_16_al(void)
 {
 	uint* r_dst = &DX;
-	uint res = OPER_AL_16() * MASK_OUT_ABOVE_16(*r_dst);
+	uint src = OPER_AL_16();
+	uint res = src * MASK_OUT_ABOVE_16(*r_dst);
 
 	*r_dst = res;
 
@@ -11807,13 +11844,15 @@ void m68k_op_mulu_16_al(void)
 	FLAG_N = NFLAG_32(res);
 	FLAG_V = VFLAG_CLEAR;
 	FLAG_C = CFLAG_CLEAR;
+	m68ki_mulu_timing(src);
 }
 
 
 void m68k_op_mulu_16_pcdi(void)
 {
 	uint* r_dst = &DX;
-	uint res = OPER_PCDI_16() * MASK_OUT_ABOVE_16(*r_dst);
+	uint src = OPER_PCDI_16();
+	uint res = src * MASK_OUT_ABOVE_16(*r_dst);
 
 	*r_dst = res;
 
@@ -11821,13 +11860,15 @@ void m68k_op_mulu_16_pcdi(void)
 	FLAG_N = NFLAG_32(res);
 	FLAG_V = VFLAG_CLEAR;
 	FLAG_C = CFLAG_CLEAR;
+	m68ki_mulu_timing(src);
 }
 
 
 void m68k_op_mulu_16_pcix(void)
 {
 	uint* r_dst = &DX;
-	uint res = OPER_PCIX_16() * MASK_OUT_ABOVE_16(*r_dst);
+	uint src = OPER_PCIX_16();
+	uint res = src * MASK_OUT_ABOVE_16(*r_dst);
 
 	*r_dst = res;
 
@@ -11835,13 +11876,15 @@ void m68k_op_mulu_16_pcix(void)
 	FLAG_N = NFLAG_32(res);
 	FLAG_V = VFLAG_CLEAR;
 	FLAG_C = CFLAG_CLEAR;
+	m68ki_mulu_timing(src);
 }
 
 
 void m68k_op_mulu_16_i(void)
 {
 	uint* r_dst = &DX;
-	uint res = OPER_I_16() * MASK_OUT_ABOVE_16(*r_dst);
+	uint src = OPER_I_16();
+	uint res = src * MASK_OUT_ABOVE_16(*r_dst);
 
 	*r_dst = res;
 
@@ -11849,6 +11892,7 @@ void m68k_op_mulu_16_i(void)
 	FLAG_N = NFLAG_32(res);
 	FLAG_V = VFLAG_CLEAR;
 	FLAG_C = CFLAG_CLEAR;
+	m68ki_mulu_timing(src);
 }
 
 

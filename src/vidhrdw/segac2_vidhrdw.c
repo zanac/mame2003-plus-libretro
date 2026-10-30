@@ -27,7 +27,7 @@ void update_megaplay_video_normal(struct mame_bitmap *bitmap, const struct recta
 
 ******************************************************************************/
 
-static int start_vdp(int sp_palbase, int display_enable, int scanbase, int line_scale, int set_visible_area)
+static int start_vdp(int sp_palbase, int display_enable, int scanbase, int line_scale, int set_visible_area, int shadow_base)
 {
 	struct segavdp_interface intf;
 
@@ -43,6 +43,9 @@ static int start_vdp(int sp_palbase, int display_enable, int scanbase, int line_
 	intf.display_enable   = display_enable;
 	intf.set_visible_area = set_visible_area;
 	intf.irq_update       = megadriv_vdp_irq_update;
+	intf.shadow_base      = shadow_base;
+	intf.hilite_base      = shadow_base * 2;
+	intf.black_pen        = -1;
 	return segavdp_start(&intf);
 }
 
@@ -51,8 +54,14 @@ VIDEO_START( segac2 )
 {
 	paletteram16 = auto_malloc(0x800 * sizeof(data16_t));
 
-	/* the display is enabled by the board (control_w) */
-	return start_vdp(0x100, 0, 0, 1, 1);
+	/* the display is enabled by the board (control_w); the shadow and
+	   highlight colors follow the 0x800 colors of the board (palette_w); the
+	   last palette entry is black, for the lines the board blanks */
+	if (start_vdp(0x100, 0, 0, 1, 1, 0x800))
+		return 1;
+	palette_set_color(SEGAC2_BLACK_PEN, 0, 0, 0);
+	segavdp_set_black_pen(SEGAC2_BLACK_PEN);
+	return 0;
 }
 
 
@@ -60,8 +69,9 @@ VIDEO_START( megadriv )
 {
 	paletteram16 = auto_malloc(0x800 * sizeof(data16_t));
 
-	/* same palettes for sprites and bg */
-	return start_vdp(0x000, 1, 0, 1, 1);
+	/* same palettes for sprites and bg; the shadow and highlight colors
+	   after the 64 VDP colors */
+	return start_vdp(0x000, 1, 0, 1, 1, 0x40);
 }
 
 
@@ -71,7 +81,7 @@ VIDEO_START( megatech )
 
 	/* same palettes for sprites and bg; the screen keeps its width, it has
 	   the BIOS display too (drivers/megatech.c centres the H32 mode) */
-	if (start_vdp(0x000, 1, 224, 2, 0))
+	if (start_vdp(0x000, 1, 224, 2, 0, 0x40))
 		return 1;
 
 	return start_megatech_video_normal();
@@ -83,7 +93,7 @@ VIDEO_START( megaplay )
 	paletteram16 = auto_malloc(0x800 * sizeof(data16_t));
 
 	/* same palettes for sprites and bg */
-	if (start_vdp(0x000, 1, 0, 1, 1))
+	if (start_vdp(0x000, 1, 0, 1, 1, 0x40))
 		return 1;
 
 	return start_megatech_video_normal();
@@ -111,6 +121,25 @@ VIDEO_UPDATE( segac2 )
 	/* generate the final screen */
 	for (y = cliprect->min_y; y <= cliprect->max_y; y++)
 		segavdp_draw_line((UINT16 *)bitmap->line[y], y, 0);
+}
+
+
+/* System C/C2: the screen is drawn in RGB a few lines at a time, with the
+   colors of the moment, as current MAME draws each line: the games change
+   the palette RAM while the screen is displayed (drivers/segac2.c draws the
+   lines before the change first) */
+VIDEO_UPDATE( segac2_rgb )
+{
+	UINT16 buf[8 + 320 + 8], *line = buf + 8;
+	int x, y;
+
+	for (y = cliprect->min_y; y <= cliprect->max_y; y++)
+	{
+		UINT32 *dest = (UINT32 *)bitmap->line[y];
+		segavdp_draw_line(line, y, 0);
+		for (x = cliprect->min_x; x <= cliprect->max_x; x++)
+			dest[x] = Machine->pens[line[x]];
+	}
 }
 
 

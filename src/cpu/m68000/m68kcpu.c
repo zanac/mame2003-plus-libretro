@@ -729,6 +729,14 @@ void m68k_end_timeslice(void)
 /* KS: Modified so that IPL* bits match with mask positions in the SR
  *     and cleaned out remenants of the interrupt controller.
  */
+/* extra clocks taken by an interrupt acknowledge (VPA / E clock wait states,
+   asked by the board's IRQ acknowledge callback): charged like the
+   exception processing of the interrupt */
+void m68k_add_int_cycles(int cycles)
+{
+	CPU_INT_CYCLES += cycles;
+}
+
 void m68k_set_irq(unsigned int int_level)
 {
 	uint old_level = CPU_INT_LEVEL;

@@ -102,6 +102,8 @@ static UINT16		prot_read_buf;		/* remembers what was returned */
 static UINT8		sound_banks;		/* number of sound banks */
 static UINT8		bloxeed_sound;		/* use kludge for bloxeed sound? */
 static UINT8		last_port;			/* the last YM3438 register selected (for the kludge) */
+static UINT8		ym_addr_hi;			/* the last YM3438 address write was to the second bank */
+static double		ym_busy_end;		/* the YM3438 is busy until this time */
 
 /* the alternate palette mode of the EPM5032 (Ribbit!, Twin Squash) */
 static int			alt_palette_mode;
@@ -125,10 +127,31 @@ static data16_t *	main_ram;			/* pointer to main RAM */
 
 ******************************************************************************/
 
+/* Current MAME powers the board on at the start of VBLANK, so the 68000
+   runs a whole frame before the first V-INT; here the frame starts at line 0
+   and VBLANK comes 38 lines earlier. The 68000 runs at twice its clock for
+   those 38 lines to catch up: from then on it is where it would be in MAME
+   at every line (Puyo Puyo 2 seeds its random numbers with the V counter
+   during the boot, and the boot of the other games ends in the same frame) */
+static double segac2_clockscale;
+
+static void segac2_boot_clock(int param)
+{
+	cpunum_set_clockscale(0, segac2_clockscale);
+}
+
 static MACHINE_INIT( segac2 )
 {
-	/* the VDP interrupts (machine/megadriv.c); bit 4 of port H masks the H-INT */
-	megadriv_irq_init(&iochip_reg[7]);
+	/* the VDP interrupts (machine/megadriv.c), with the boot catch-up below */
+	megadriv_irq_init(38);
+
+	ym_busy_end = 0;
+	ym_addr_hi = 0;
+
+	/* the 68000 catches up the VBLANK of the MAME power on (38 lines) */
+	segac2_clockscale = cpunum_get_clockscale(0);
+	cpunum_set_clockscale(0, segac2_clockscale * 2);
+	timer_set(cpu_getscanlinetime(38), 0, segac2_boot_clock);
 
 	/* the RAM mirror at 0xe00000 */
 	cpu_setbank(1, main_ram);
@@ -159,14 +182,39 @@ static MACHINE_INIT( segac2 )
 
 ******************************************************************************/
 
+/* The YM3438 is busy for 32 x 6 clocks after a data write, as in fm.c and
+   current MAME. Musashi does all the bus accesses of an instruction at its
+   start; the 68000 of current MAME does them in order, after fetching the
+   extension words of the instruction. The sound drivers poll the busy bit
+   before every write, so the time of the status read relative to the data
+   write decides how many times they poll: one poll too many every frame or
+   two leaves Puyo Puyo 2 one frame behind MAME. The time of the access is
+   taken here as 4 cycles per word of the instruction read so far, which
+   matches the busy windows measured against MAME on Puyo Puyo 2
+   (TST.B (xxx).L after MOVE.B Dn,(d16,An)) and Thunder Force AC
+   (MOVE.B (xxx).L,Dn after MOVE.B Dn,(xxx).L). */
+static double ym3438_access_time(void)
+{
+	int words = (activecpu_get_reg(REG_PC) - activecpu_get_reg(REG_PREVIOUSPC)) / 2;
+	return timer_get_time() + TIME_IN_CYCLES(4 * words, 0);
+}
+
+static UINT8 ym3438_status(UINT8 status)
+{
+	status &= 0x7f;
+	if (ym3438_access_time() < ym_busy_end)
+		status |= 0x80;
+	return status;
+}
+
 /* handle reads from the YM3438 */
 static READ16_HANDLER( ym3438_r )
 {
 	switch (offset)
 	{
-		case 0: return YM2612_status_port_0_A_r(0);
+		case 0: return ym3438_status(YM2612_status_port_0_A_r(0));
 		case 1: return YM2612_read_port_0_r(0);
-		case 2: return YM2612_status_port_0_B_r(0);
+		case 2: return ym3438_status(YM2612_status_port_0_B_r(0));
 	}
 	return 0xff;
 }
@@ -184,6 +232,12 @@ static WRITE16_HANDLER( ym3438_w )
 		/* to do here */
 		if (bloxeed_sound && last_port == 0x27 && (offset & 1))
 			data &= ~0x08;
+
+		/* a data write to the bank of the last address write makes the chip busy */
+		if ((offset == 1 && !ym_addr_hi) || (offset == 3 && ym_addr_hi))
+			ym_busy_end = ym3438_access_time() + (32.0 * 6.0) / (double)(XL2_CLOCK / 7);
+		else if (offset == 0 || offset == 2)
+			ym_addr_hi = (offset == 2);
 
 		switch (offset)
 		{
@@ -258,9 +312,13 @@ static WRITE16_HANDLER( palette_w )
 	/* adjust for the palette bank */
 	offset = palette_offset(offset);
 
-	/* combine data */
-	COMBINE_DATA(&paletteram16[offset]);
+	/* combine data; the lines already displayed keep the old color, as in
+	   current MAME (VIDEO_UPDATE(segac2_rgb)) */
 	newword = paletteram16[offset];
+	COMBINE_DATA(&newword);
+	if (newword != paletteram16[offset])
+		segavdp_update_before_line();
+	paletteram16[offset] = newword;
 
 	/* up to 8 bits */
 	r = ((newword << 4) & 0xf0) | ((newword >>  9) & 0x08);
@@ -272,6 +330,18 @@ static WRITE16_HANDLER( palette_w )
 
 	/* set the color */
 	palette_set_color(offset + 0x0000, r, g, b);
+
+	/* the shadow and highlight colors (VDP register 12 bit 3), as current
+	   MAME: half the 5-bit level, and half plus 16 */
+	{
+		int r5 = ((newword << 1) & 0x1e) | ((newword >> 12) & 0x01);
+		int g5 = ((newword >> 3) & 0x1e) | ((newword >> 13) & 0x01);
+		int b5 = ((newword >> 7) & 0x1e) | ((newword >> 14) & 0x01);
+		r5 >>= 1; g5 >>= 1; b5 >>= 1;
+		palette_set_color(offset + 0x0800, (r5 << 3) | (r5 >> 2), (g5 << 3) | (g5 >> 2), (b5 << 3) | (b5 >> 2));
+		r5 |= 0x10; g5 |= 0x10; b5 |= 0x10;
+		palette_set_color(offset + 0x1000, (r5 << 3) | (r5 >> 2), (g5 << 3) | (g5 >> 2), (b5 << 3) | (b5 >> 2));
+	}
 }
 
 
@@ -346,7 +416,7 @@ static WRITE16_HANDLER( iochip_w )
 			newbank = (data & 3) * 0x200;
 			if (newbank != segavdp_get_palbank())
 			{
-				force_partial_update(segavdp_scanline() + 1 + segavdp_get_scanbase());
+				segavdp_update_before_line();
 				segavdp_set_palbank(newbank);
 			}
 			if (sound_banks > 1)
@@ -390,7 +460,7 @@ static void set_alt_palette(int enable)
 {
 	if (enable != alt_palette_mode)
 	{
-		force_partial_update(segavdp_scanline() + 1 + segavdp_get_scanbase());
+		segavdp_update_before_line();
 		alt_palette_mode = enable;
 		segavdp_set_alt_palette(enable);
 	}
@@ -461,7 +531,7 @@ static WRITE16_HANDLER( prot_w )
 	/* if the palette changed, force an update */
 	if (new_sp_palbase != segavdp_get_sp_palbase() || new_bg_palbase != segavdp_get_bg_palbase())
 	{
-		force_partial_update(segavdp_scanline() + 1 + segavdp_get_scanbase());
+		segavdp_update_before_line();
 		segavdp_set_palbases(new_bg_palbase, new_sp_palbase);
 		if (LOG_PALETTE) log_cb(RETRO_LOG_DEBUG, LOGPRE "Set palbank: %d/%d (scan=%d)\n", new_bg_palbase, new_sp_palbase, cpu_getscanline());
 	}
@@ -2582,14 +2652,14 @@ static MACHINE_DRIVER_START( segac )
 	MDRV_NVRAM_HANDLER(segac2)
 
 	/* video hardware */
-	MDRV_VIDEO_ATTRIBUTES(VIDEO_TYPE_RASTER | VIDEO_HAS_SHADOWS | VIDEO_HAS_HIGHLIGHTS)
+	MDRV_VIDEO_ATTRIBUTES(VIDEO_TYPE_RASTER | VIDEO_RGB_DIRECT | VIDEO_NEEDS_6BITS_PER_GUN)
 	MDRV_SCREEN_SIZE(320,224)
 	MDRV_VISIBLE_AREA(0, 319, 0, 223)
-	MDRV_PALETTE_LENGTH(2048)
+	MDRV_PALETTE_LENGTH(2048*3 + 1)	/* normal, shadow, highlight, black */
 
 	MDRV_VIDEO_START(segac2)
 	MDRV_VIDEO_EOF(segac2)
-	MDRV_VIDEO_UPDATE(segac2)
+	MDRV_VIDEO_UPDATE(segac2_rgb)
 
 	/* sound hardware */
 	MDRV_SOUND_ADD(YM2612, ym3438_intf)
@@ -3228,6 +3298,8 @@ static void init_saves(void)
 
 	state_save_register_UINT8 ("C2_IO", 0, "I/O Writes", iochip_reg, 0x10);
 	state_save_register_UINT8 ("C2_IO", 0, "YM3438 Last Port", &last_port, 1);
+	state_save_register_UINT8 ("C2_IO", 0, "YM3438 Address Bank", &ym_addr_hi, 1);
+	state_save_register_double("C2_IO", 0, "YM3438 Busy End", &ym_busy_end, 1);	/* the timer time base is saved too */
 
 	state_save_register_UINT16 ("C2 Protection", 0, "Write Buffer", &prot_write_buf, 1);
 	state_save_register_UINT16 ("C2 Protection", 0, "Read Buffer", &prot_read_buf, 1);

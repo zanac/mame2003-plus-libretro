@@ -312,6 +312,9 @@ void m68k_end_timeslice(void);          /* End timeslice now */
  */
 void m68k_set_irq(unsigned int int_level);
 
+/* extra clocks of an interrupt acknowledge, from the IRQ acknowledge callback */
+void m68k_add_int_cycles(int cycles);
+
 
 /* Halt the CPU as if you pulsed the HALT pin. */
 void m68k_pulse_halt(void);

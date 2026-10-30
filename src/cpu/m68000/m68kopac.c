@@ -4989,7 +4989,12 @@ void m68k_op_bclr_8_r_al(void)
 void m68k_op_bclr_32_s_d(void)
 {
 	uint* r_dst = &DY;
-	uint mask = 1 << (OPER_I_8() & 0x1f);
+	uint bit = OPER_I_8() & 0x1f;
+	uint mask = 1 << bit;
+
+	/* 68000: 2 clocks less for bits 0-15 (the table has the maximum) */
+	if(CPU_TYPE_IS_000(CPU_TYPE) && bit < 16)
+		USE_CYCLES(-2);
 
 	FLAG_Z = *r_dst & mask;
 	*r_dst &= ~mask;
@@ -8051,7 +8056,12 @@ void m68k_op_bset_8_r_al(void)
 void m68k_op_bset_32_s_d(void)
 {
 	uint* r_dst = &DY;
-	uint mask = 1 << (OPER_I_8() & 0x1f);
+	uint bit = OPER_I_8() & 0x1f;
+	uint mask = 1 << bit;
+
+	/* 68000: 2 clocks less for bits 0-15 (the table has the maximum) */
+	if(CPU_TYPE_IS_000(CPU_TYPE) && bit < 16)
+		USE_CYCLES(-2);
 
 	FLAG_Z = *r_dst & mask;
 	*r_dst |= mask;

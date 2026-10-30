@@ -54,6 +54,9 @@ static void vdp_dma_fill(int);
 static void vdp_dma_copy(void);
 
 static void drawline(UINT16 *bitmap, int line, int bgfill);
+static void drawline_ste(UINT16 *bitmap, int line, int bgfill, UINT32 *scrolla_tiles, UINT32 *scrollb_tiles,
+		UINT32 *window_tiles, int scrolla_offset, int scrollb_offset, int scrolla_lclip, int scrolla_rclip,
+		int window_lclip, int window_rclip, int nsprites);
 static void get_scroll_tiles(int line, int scrollnum, UINT32 scrollbase, UINT32 *tiles, int *offset);
 static void get_window_tiles(int line, UINT32 scrollbase, UINT32 *tiles);
 static void drawline_tiles(UINT32 *tiles, UINT16 *bmap, int pri, int offset, int lclip, int rclip);
@@ -84,6 +87,8 @@ static struct
 	UINT8		display_enable;				/* is the display enabled (board control)? */
 	UINT8		internal_vblank;			/* state of the VBLANK line */
 	UINT8		iack_mode;					/* Mega Play interrupt acknowledge / HBLANK mode */
+	UINT8		irq6_pending;				/* status bit 7: V-INT happened, cleared by its acknowledge */
+	UINT8		sprite_collision;			/* status bit 5: two sprite pixels overlapped this frame */
 
 	/* vram bases */
 	UINT32		scrollabase;				/* base address of scroll A tiles */
@@ -110,6 +115,12 @@ static struct
 	UINT32		window_hpos;				/* window X position */
 	UINT8		window_width;				/* window width */
 } vdp;
+
+/* shadow/highlight mode: the layers are drawn with the raw VDP colors
+   (palette line * 16 + color, sprites with 0x40 low / 0x80 high priority)
+   and the high priority tiles also mark the pixels they cover */
+static int raw_mode;
+static UINT8 *raw_cover;
 
 
 
@@ -180,6 +191,10 @@ int segavdp_start(const struct segavdp_interface *intf)
 	if (vdp.intf.line_scale < 1)
 		vdp.intf.line_scale = 1;
 
+	/* the shadow/highlight offsets must leave room for the 64 VDP colors */
+	if (vdp.intf.shadow_base && (vdp.intf.shadow_base < 0x40 || vdp.intf.hilite_base < vdp.intf.shadow_base + 0x40))
+		vdp.intf.shadow_base = vdp.intf.hilite_base = 0;
+
 	/* allocate memory for the VDP and the lookup table */
 	vdp.vram				= auto_malloc(VRAM_SIZE);
 	vdp.vsram				= auto_malloc(VSRAM_SIZE);
@@ -227,6 +242,8 @@ int segavdp_start(const struct segavdp_interface *intf)
 
 	/* save states (the names of the System C/C2 driver, so the order is kept) */
 	state_save_register_UINT8 ("C2_VDP", 0, "VDP Registers", vdp.regs, 32);
+	state_save_register_UINT8 ("C2_VDP", 0, "V-INT pending", &vdp.irq6_pending, 1);
+	state_save_register_UINT8 ("C2_VDP", 0, "Sprite collision", &vdp.sprite_collision, 1);
 	state_save_register_UINT8 ("C2_VDP", 0, "VDP VRam", vdp.vram, 0x10000);
 	state_save_register_UINT8 ("C2_VDP", 0, "VDP VSRam", vdp.vsram, 0x80);
 	state_save_register_int("C2_Video", 0, "Palette Bank", &vdp.palbank);
@@ -286,6 +303,98 @@ static void vblank_end(int param)
 void segavdp_set_vblank(void)
 {
 	vdp.internal_vblank = 1;
+	vdp.irq6_pending = 1;
+}
+
+/* the 68000 acknowledges V-INT: as current MAME the pending flag (status bit
+   7) only clears while V-INT is enabled in register 1 (System C/C2 takes
+   V-INT from another line, so there the flag stays set) */
+int segavdp_irq6_pending(void) { return vdp.irq6_pending; }
+void segavdp_set_black_pen(int pen) { vdp.intf.black_pen = pen; }
+
+void segavdp_irq6_ack(void)
+{
+	if (vdp.regs[1] & 0x20)
+		vdp.irq6_pending = 0;
+}
+
+
+/* sprite collision for one visible line, as current MAME: the sprites of
+   the line are walked in link order with the same sprite and pixel limits,
+   and two opaque pixels on the same position (0-511) set status bit 5.
+   The flag is cleared at the start of the frame (line 0). It is computed
+   apart from the rendering, so it does not depend on the frameskip. */
+void segavdp_sprite_line(int line)
+{
+	UINT8 used[512];
+	int maxsprites, maxpixels, spritemask = 0, link = 0;
+
+	if (line == 0)
+		vdp.sprite_collision = 0;
+	if (vdp.sprite_collision || line < 0 || line >= 224)
+		return;
+
+	if (vdp.regs[12] & 0x01)
+		maxsprites = 80, maxpixels = 320;
+	else
+		maxsprites = 64, maxpixels = 256;
+	memset(used, 0, sizeof(used));
+
+	do
+	{
+		UINT8 *sb = &VDP_VRAM_BYTE(vdp.spritebase + 8 * link);
+		int ypos = (((sb[0] & 0x01) << 8) | sb[1]) - 128;
+		int height = (sb[2] & 0x03) + 1;
+		int width = ((sb[2] & 0x0c) >> 2) + 1;
+		int xpos = ((sb[6] & 0x01) << 8) | sb[7];
+
+		link = sb[3] & 0x7f;
+		if (ypos <= line && ypos + height * 8 > line)
+		{
+			int attr = (sb[4] << 8) | sb[5];
+			int patno = attr & 0x7ff;
+			int xflip = attr & 0x0800, yflip = attr & 0x1000;
+			int yline = line - ypos, ytile = yline >> 3, xtile, xx;
+
+			if (xpos == 0)
+				spritemask |= 1;
+			if (xpos > 0 && xpos < 0x40)
+				spritemask |= 2;
+			if (spritemask == 3)
+				return;
+
+			yline &= 7;
+			if (yflip)
+			{
+				ytile = height - ytile - 1;
+				yline = 7 - yline;
+			}
+			xx = xpos;
+			for (xtile = 0; xtile < width; xtile++)
+			{
+				int code = (xflip ? width - xtile - 1 : xtile) * height + ytile;
+				UINT32 tile = *(UINT32 *)&VDP_VRAM_BYTE(((patno + code) & 0x7ff) * 32 + 4 * yline);
+				int i;
+
+				for (i = 0; i < 8; i++)
+				{
+					if (EXTRACT_PIXEL(tile, xflip ? 7 - i : i))
+					{
+						if (used[xx])
+						{
+							vdp.sprite_collision = 1;
+							return;
+						}
+						used[xx] = 1;
+					}
+					xx = (xx + 1) & 0x1ff;
+					if (--maxpixels == 0)
+						return;
+				}
+			}
+		}
+		maxsprites--;
+	} while (maxsprites >= 0 && link != 0);
 }
 
 
@@ -294,6 +403,7 @@ void segavdp_eof(void)
 {
 	/* set VBLANK flag */
 	vdp.internal_vblank = 1;
+	vdp.irq6_pending = 1;
 
 	/* set a timer for VBLANK off */
 	timer_set(segavdp_scanlinetime(0), 0, vblank_end);
@@ -314,9 +424,20 @@ void segavdp_set_iack_mode(int enable)
 /* set the display enable bit */
 void segavdp_enable_display(int enable)
 {
-	if (!vdp.internal_vblank)
-		force_partial_update(segavdp_scanline() + vdp.intf.scanbase);
+	if (enable != vdp.display_enable)
+		segavdp_update_before_line();
 	vdp.display_enable = enable;
+}
+
+/* System C/C2 board controls (display enable, palette banks): current MAME
+   draws each line at the start of the next one with the board state of that
+   moment, so a change during a line already applies to that line. Draw the
+   lines before it with the old state. */
+void segavdp_update_before_line(void)
+{
+	int line = segavdp_drawn_line() + vdp.intf.scanbase - 1;
+	if (line >= 0)
+		force_partial_update(line);
 }
 
 void segavdp_set_palbases(int bg_palbase, int sp_palbase)
@@ -358,6 +479,19 @@ int segavdp_horzbeampos(void)
 	if (vdp.intf.line_scale == 1)
 		return cpu_gethorzbeampos();
 	return ((cpu_getscanline() % vdp.intf.line_scale) * Machine->drv->screen_width + cpu_gethorzbeampos()) / vdp.intf.line_scale;
+}
+
+/* the last line already drawn, as in current MAME (each line is drawn at its
+   start): on the boards of the 315-5313 H-INT and the V counter move to the
+   next line at the end of the active display (machine/megadriv.c), so from
+   there the next line counts as started and a change goes to the line after
+   it */
+int segavdp_drawn_line(void)
+{
+	int line = segavdp_scanline();
+	if (vdp.intf.shadow_base && segavdp_horzbeampos() >= Machine->drv->screen_width * 320 / 342)
+		line++;
+	return line;
 }
 
 double segavdp_scanlinetime(int line)
@@ -423,13 +557,18 @@ READ16_HANDLER( segavdp_r )
 			int xpos = segavdp_horzbeampos();
 			int ypos = segavdp_scanline();
 
+			/* the V counter moves to the next line at the end of the active
+			   display, when H-INT is raised (machine/megadriv.c) */
+			if (xpos >= Machine->drv->screen_width * 320 / 342)
+				ypos = (ypos + 1) % 262;
+
 			/* adjust for the weird counting rules */
 			if (xpos > 0xe9) xpos -= (342 - 0x100);
 			if (ypos > 0xea) ypos -= (262 - 0x100);
 
-			/* kludge for ichidant: it sets the H counter to 160, then */
-			/* expects that a read from here will return 159 */
-			if (ypos > 0) ypos -= 2;
+			/* the V counter is the line, as current MAME (H-INT is raised at
+			   the start of its line, machine/megadriv.c): no more Ichidant-R
+			   kludge (2 lines less, for the H-INT at the end of the next line) */
 			return (ypos << 8) | xpos;
 		}
 	}
@@ -522,6 +661,8 @@ static void vdp_data_w(int data)
 	/* handle the fill case */
 	if (vdp.dmafill)
 	{
+		if (!vdp.internal_vblank && vdp.intf.shadow_base)
+			force_partial_update(segavdp_drawn_line() + vdp.intf.scanbase);
 		vdp_dma_fill(data);
 		vdp.dmafill = 0;
 		return;
@@ -532,11 +673,14 @@ static void vdp_data_w(int data)
 	{
 		case 0x01:		/* VRAM write */
 
-			/* if the hscroll RAM is changing during screen refresh, force an update */
+			/* if the hscroll RAM is changing during screen refresh, force an
+			   update; on the boards of the 315-5313 any VRAM change, as current
+			   MAME draws each line at its start */
 			if (!vdp.internal_vblank &&
-				vdp.address >= vdp.hscrollbase &&
-				vdp.address < vdp.hscrollbase + vdp.hscrollsize)
-				force_partial_update(segavdp_scanline() + vdp.intf.scanbase);
+				(vdp.intf.shadow_base ||
+				 (vdp.address >= vdp.hscrollbase &&
+				  vdp.address < vdp.hscrollbase + vdp.hscrollsize)))
+				force_partial_update(segavdp_drawn_line() + vdp.intf.scanbase);
 
 			/* write to VRAM */
 			if (vdp.address & 1)
@@ -555,7 +699,20 @@ static void vdp_data_w(int data)
 				palette_set_color(vdp.intf.cram_base + ((vdp.address / 2) & 0x3f), (r << 4) | r, (g << 4) | g, (b << 4) | b);
 			}
 			else
+			{
 				paletteram16_xxxxBBBBGGGGRRRR_word_w(vdp.address/2, data, 0);
+
+				/* Mega Drive boards: the shadow and highlight colors of the
+				   entry (half the 3-bit level, and half plus 7 of 14), as the
+				   315-5313 of current MAME */
+				if (vdp.intf.shadow_base && vdp.intf.shadow_base < 0x800)
+				{
+					int entry = (vdp.address / 2) & 0x3f;
+					int r = (data >> 1) & 7, g = (data >> 5) & 7, b = (data >> 9) & 7;
+					palette_set_color(entry + vdp.intf.shadow_base, r * 0x11, g * 0x11, b * 0x11);
+					palette_set_color(entry + vdp.intf.hilite_base, (7 + r) * 0x11, (7 + g) * 0x11, (7 + b) * 0x11);
+				}
+			}
 			break;
 
 
@@ -563,7 +720,7 @@ static void vdp_data_w(int data)
 
 			/* if the vscroll RAM is changing during screen refresh, force an update */
 			if (!vdp.internal_vblank)
-				force_partial_update(segavdp_scanline() + vdp.intf.scanbase);
+				force_partial_update(segavdp_drawn_line() + vdp.intf.scanbase);
 
 			/* write to VSRAM */
 			if (vdp.address & 1)
@@ -629,6 +786,14 @@ static int vdp_control_r(void)
 	if (vdp.internal_vblank)
 		status |= 0x0008;
 
+	/* V-INT happened (Puyo Puyo 2 keeps the status from its V-INT handler) */
+	if (vdp.irq6_pending)
+		status |= 0x0080;
+
+	/* sprite collision */
+	if (vdp.sprite_collision)
+		status |= 0x0020;
+
 	/* set the HBLANK bit */
 	{
 		if (vdp.iack_mode)
@@ -693,7 +858,7 @@ static void vdp_register_w(int data)
 	/* are written during a screen refresh. This must happen BEFORE the
 	   store, otherwise the lines already displayed get the new value */
 	if (!vdp.internal_vblank && is_important[regnum] && vdp.regs[regnum] != regdat)
-		force_partial_update(segavdp_scanline() + vdp.intf.scanbase);
+		force_partial_update(segavdp_drawn_line() + vdp.intf.scanbase);
 
 	vdp.regs[regnum] = regdat;
 
@@ -810,6 +975,8 @@ static void vdp_control_dma(int data)
 				break;
 
 			case 0xC0:		/* VRAM copy */
+				if (!vdp.internal_vblank && vdp.intf.shadow_base)
+					force_partial_update(segavdp_drawn_line() + vdp.intf.scanbase);
 				vdp_dma_copy();
 				break;
 		}
@@ -873,14 +1040,16 @@ static void vdp_dma_fill(int data)
 	if (!length)
 		length = 0xffff;
 
-	/* handle the fill */
+	/* handle the fill: length + 1 bytes, and the length registers are left
+	   at 0, as current MAME */
 	VDP_VRAM_BYTE(vdp.address) = data;
 	data >>= 8;
-	for(count = 0; count < length; count++)
+	for(count = 0; count <= length; count++)
 	{
 		VDP_VRAM_BYTE(vdp.address ^ 1) = data;
 		vdp.address += vdp.regs[15];
 	}
+	vdp.regs[19] = vdp.regs[20] = 0;
 }
 
 
@@ -944,6 +1113,194 @@ static int vdp_getvscroll(int plane, int column)
 
 ******************************************************************************/
 
+/* the sprites of a line as current MAME draws them: in link order, at most
+   80 (H40) or 64 (H32) entries of the list and 320 or 256 pixels on the
+   line; a sprite at X 0 followed by one at X 1-63 masks the rest of the
+   line. limit[i] gets the pixels drawn of each sprite (0: none). */
+static int sprite_draw_limit = -1;
+
+static void sprite_line_limits(int line, UINT8 **list, int count, int *limit)
+{
+	int maxsprites = (vdp.regs[12] & 0x01) ? 80 : 64;
+	int maxpixels = (vdp.regs[12] & 0x01) ? 320 : 256;
+	int mask = 0, i;
+
+	for (i = 0; i < count; i++)
+		limit[i] = 0;
+	for (i = 0; i < count && i <= maxsprites; i++)
+	{
+		UINT8 *sb = list[i];
+		int ypos = (((sb[0] & 0x01) << 8) | sb[1]) - 0x80;
+		int height = ((sb[2] & 0x03) + 1) * 8;
+		int width = (((sb[2] & 0x0c) >> 2) + 1) * 8;
+		int xpos = ((sb[6] & 0x01) << 8) | sb[7];
+
+		if (line < ypos || line >= ypos + height)
+			continue;
+		if (xpos == 0)
+			mask |= 1;
+		if (xpos > 0 && xpos < 0x40)
+			mask |= 2;
+		if (mask == 3)
+			return;
+		if (maxpixels <= width)
+		{
+			limit[i] = maxpixels;
+			return;
+		}
+		limit[i] = width;
+		maxpixels -= width;
+	}
+}
+
+/* shadow/highlight mode (register 12 bit 3), as the 315-5313 of current MAME:
+   the pixels where only low priority layers show are shadowed, high priority
+   tiles and sprites show normally; sprite colors 0x3e and 0x3f (palette 3,
+   colors 14 and 15) are not drawn but highlight or shadow what is under
+   them, and colors 0x0e/0x1e/0x2e always have normal intensity. As on System
+   C/C2 in MAME the shadowed and highlighted pixels take the background
+   palette. */
+static void drawline_ste(UINT16 *bitmap, int line, int bgfill, UINT32 *scrolla_tiles, UINT32 *scrollb_tiles,
+		UINT32 *window_tiles, int scrolla_offset, int scrollb_offset, int scrolla_lclip, int scrolla_rclip,
+		int window_lclip, int window_rclip, int nsprites)
+{
+	UINT16 lo_buf[8 + BITMAP_WIDTH + 8], hi_buf[8 + BITMAP_WIDTH + 8], spr_buf[8 + BITMAP_WIDTH + 8];
+	UINT8 cover[BITMAP_WIDTH];
+	UINT16 *lo = lo_buf + 8, *hi = hi_buf + 8, *spr = spr_buf + 8;
+	UINT8 *sprites[81];
+	int limits[81];
+	int count, link, sprite, x;
+	int bgraw = vdp.bgcol & 0x3f;
+	int shadow = vdp.regs[12] & 0x08;
+
+	(void)nsprites;
+	/* 0x100 marks the backdrop, which takes no background base */
+	for (x = -8; x < BITMAP_WIDTH + 8; x++)
+	{
+		lo[x] = 0x100 | bgraw;
+		hi[x] = 0;
+		spr[x] = 0;
+	}
+	memset(cover, 0, sizeof(cover));
+
+	raw_mode = 1;
+
+	/* low priority B, A, window */
+	drawline_tiles(scrollb_tiles, lo, 0, scrollb_offset, 0, BITMAP_WIDTH - 1);
+	drawline_tiles(scrolla_tiles, lo, 0, scrolla_offset, scrolla_lclip, scrolla_rclip);
+	drawline_tiles(window_tiles, lo, 0, 0, window_lclip, window_rclip);
+
+	/* high priority B, A, window, and the pixels they cover */
+	raw_cover = cover;
+	drawline_tiles(scrollb_tiles, hi, 1, scrollb_offset, 0, BITMAP_WIDTH - 1);
+	drawline_tiles(scrolla_tiles, hi, 1, scrolla_offset, scrolla_lclip, scrolla_rclip);
+	drawline_tiles(window_tiles, hi, 1, 0, window_lclip, window_rclip);
+	raw_cover = NULL;
+
+	/* the sprites of the line in link order; the first one in the list wins */
+	count = link = 0;
+	for (sprite = 0; sprite < 80; sprite++)
+	{
+		UINT8 *spritebase = &VDP_VRAM_BYTE(vdp.spritebase + 8 * link);
+		sprites[count++] = spritebase;
+		link = spritebase[3] & 0x7F;
+		if (!link)
+			break;
+	}
+	sprite_line_limits(line, sprites, count, limits);
+	for (sprite = count - 1; sprite >= 0; sprite--)
+		if (limits[sprite])
+		{
+			sprite_draw_limit = limits[sprite];
+			drawline_sprite(line, spr, (sprites[sprite][4] & 0x80) ? 1 : 0, sprites[sprite]);
+		}
+	sprite_draw_limit = -1;
+
+	raw_mode = 0;
+
+	/* normal mode: high priority sprites, then high priority tiles, then low
+	   priority sprites, then the low priority tiles, as current MAME (the
+	   first sprite of the list is the one in the sprite line buffer) */
+	if (!shadow)
+	{
+		for (x = 0; x < BITMAP_WIDTH; x++)
+		{
+			int v = lo[x], s = spr[x], is_sprite = 0;
+			const int *lookup;
+
+			if (s & 0x40)
+				v = s & 0x3f, is_sprite = 1;
+			if (cover[x] && (hi[x] & 0x0f))
+				v = hi[x] & 0x3f, is_sprite = 0;
+			if (s & 0x80)
+				v = s & 0x3f, is_sprite = 1;
+			lookup = is_sprite ? vdp.sp_pal_lookup : (v & 0x100) ? vdp.bd_pal_lookup : vdp.bg_pal_lookup;
+			bitmap[x] = (bgfill && (v & 0x100)) ? bgfill : (lookup[(v >> 4) & 3] + (v & 0x0f));
+		}
+		return;
+	}
+
+	/* combine, as current MAME */
+	for (x = 0; x < BITMAP_WIDTH; x++)
+	{
+		int v = lo[x], flags = 0, is_sprite = 0, s = spr[x], idx;
+		const int *lookup;
+
+		/* low priority sprite */
+		if (s & 0x40)
+		{
+			int sd = s & 0x3f;
+			if (sd == 0x0e || sd == 0x1e || sd == 0x2e)
+				v = sd, flags = 0x4000, is_sprite = 1;
+			else if (sd == 0x3e)
+				flags |= 0x8000;
+			else if (sd == 0x3f)
+				flags |= 0x2000;
+			else
+				v = sd, flags = 0, is_sprite = 1;
+		}
+
+		/* high priority tiles */
+		if (cover[x])
+		{
+			if (hi[x] & 0x0f)
+				v = hi[x] & 0x3f, flags = 0x4000, is_sprite = 0;
+			else
+				flags |= 0x4000;
+		}
+
+		/* high priority sprite */
+		if (s & 0x80)
+		{
+			int sd = s & 0x3f;
+			if (sd == 0x3e)
+				flags |= 0x8000;
+			else if (sd == 0x3f)
+				flags |= 0x2000;
+			else
+				v = sd, flags = 0x4000, is_sprite = 1;
+		}
+
+		/* to the palette */
+		lookup = is_sprite ? vdp.sp_pal_lookup : (v & 0x100) ? vdp.bd_pal_lookup : vdp.bg_pal_lookup;
+		switch (flags)
+		{
+			case 0x0000: case 0x2000: case 0x6000:		/* shadow */
+				idx = ((v & 0x100) ? vdp.bd_pal_lookup : vdp.bg_pal_lookup)[(v >> 4) & 3] + (v & 0x0f) + vdp.intf.shadow_base;
+				break;
+			case 0xc000:								/* highlight */
+				idx = ((v & 0x100) ? vdp.bd_pal_lookup : vdp.bg_pal_lookup)[(v >> 4) & 3] + (v & 0x0f) + vdp.intf.hilite_base;
+				break;
+			default:									/* normal */
+				idx = lookup[(v >> 4) & 3] + (v & 0x0f);
+				break;
+		}
+
+		bitmap[x] = (bgfill && (v & 0x100)) ? bgfill : idx;
+	}
+}
+
+
 static void drawline(UINT16 *bitmap, int line, int bgfill)
 {
 	int lowsprites, highsprites, link;
@@ -954,6 +1311,11 @@ static void drawline(UINT16 *bitmap, int line, int bgfill)
 	int window_lclip, window_rclip;
 	int scrolla_lclip, scrolla_rclip;
 	int column, sprite;
+
+	/* the board display enable (System C/C2) blanks the line to black, as
+	   current MAME; the VDP display enable (register 1) shows the backdrop */
+	if (!vdp.display_enable)
+		bgcolor = (vdp.intf.black_pen >= 0) ? vdp.intf.black_pen : get_black_pen();
 
 	/* clear to the background color */
 		for (column = 0; column < BITMAP_WIDTH; column++)
@@ -1010,6 +1372,15 @@ static void drawline(UINT16 *bitmap, int line, int bgfill)
 		scrolla_rclip = window_lclip - 1;
 	}
 
+	/* the boards of the 315-5313 (System C/C2, Mega Drive): composed per pixel
+	   as current MAME, with its sprite limits and the shadow/highlight mode */
+	if (vdp.intf.shadow_base)
+	{
+		drawline_ste(bitmap, line, bgfill, scrolla_tiles, scrollb_tiles, window_tiles,
+				scrolla_offset, scrollb_offset, scrolla_lclip, scrolla_rclip, window_lclip, window_rclip, link);
+		return;
+	}
+
 	/* Scroll B Low */
 	drawline_tiles(scrollb_tiles, bitmap, 0, scrollb_offset, 0, BITMAP_WIDTH - 1);
 
@@ -1061,11 +1432,28 @@ static void get_scroll_tiles(int line, int scrollnum, UINT32 scrollbase, UINT32 
 	/* loop over columns */
 	for (column = 0; column < 41; column++)
 	{
-		int columnvscroll = vdp_getvscroll(scrollnum, column) + line;
+		int columnvscroll, temp, tilebase;
+
+		/* column scroll, as current MAME: each 16 pixel column of the screen
+		   takes the vertical scroll of the column before it for its first
+		   (hscroll & 7) + 8 pixels when hscroll is not a multiple of 16; the
+		   tiles never straddle the change */
+		if (vdp.vscrollmode == 0x01)
+		{
+			int hs = (0x400 - (linehscroll * 8 + (-*offset))) & 0x3ff;
+			int x0 = *offset + 8 * column, c, idx;
+			if (x0 < 0)
+				x0 = 0;
+			c = x0 >> 4;
+			idx = ((hs & 0x0f) && (x0 & 15) < (hs & 7) + 8) ? c - 1 : c;
+			columnvscroll = (VDP_VSRAM_WORD((4 * idx + scrollnum) & 0x7e) & 0x7ff) + line;
+		}
+		else
+			columnvscroll = vdp_getvscroll(scrollnum, column) + line;
 
 		/* determine the base of the tilemap row */
-		int temp = ((columnvscroll / 8) & (vdp.scrollheight - 1)) * vdp.scrollwidth;
-		int tilebase = scrollbase + 2 * temp;
+		temp = ((columnvscroll / 8) & (vdp.scrollheight - 1)) * vdp.scrollwidth;
+		tilebase = scrollbase + 2 * temp;
 
 		/* offset into the tilemap based on the column */
 		temp = (linehscroll + column) & (vdp.scrollwidth - 1);
@@ -1111,10 +1499,19 @@ static void drawline_tiles(UINT32 *tiles, UINT16 *bmap, int pri, int offset, int
 		/* if the tile is the correct priority, draw it */
 		if (((tile >> 15) & 1) == pri && offset < BITMAP_WIDTH)
 		{
-			int colbase = vdp.bg_pal_lookup[(tile >> 13) & 3];
+			int colbase = raw_mode ? ((tile >> 13) & 3) << 4 : vdp.bg_pal_lookup[(tile >> 13) & 3];
 			UINT32 *tp = (UINT32 *)&VDP_VRAM_BYTE((tile & 0x7ff) * 32);
 			UINT32 mytile;
 			int col;
+
+			/* shadow/highlight: a high priority tile covers its pixels, transparent too */
+			if (raw_cover)
+			{
+				int x;
+				for (x = offset; x < offset + 8; x++)
+					if (x >= 0 && x < BITMAP_WIDTH && x >= lclip && x <= rclip)
+						raw_cover[x] = 1;
+			}
 
 			/* vertical flipping */
 			if (!(tile & 0x1000))
@@ -1210,7 +1607,7 @@ static INLINE void draw8pixs(UINT16 *bmap, int patno, int priority, int colbase,
 		return;
 
 	/* non-transparent */
-	if ((colbase & 0x30) != 0x30 || !(vdp.regs[12] & 0x08))
+	if (raw_mode || (colbase & 0x30) != 0x30 || !(vdp.regs[12] & 0x08))
 	{
 		col = EXTRACT_PIXEL(tile, 0); if (col) bmap[0] = colbase + col;
 		col = EXTRACT_PIXEL(tile, 1); if (col) bmap[1] = colbase + col;
@@ -1288,7 +1685,7 @@ static INLINE void draw8pixs_hflip(UINT16 *bmap, int patno, int priority, int co
 		return;
 
 	/* non-transparent */
-	if ((colbase & 0x30) != 0x30 || !(vdp.regs[12] & 0x08))
+	if (raw_mode || (colbase & 0x30) != 0x30 || !(vdp.regs[12] & 0x08))
 	{
 		col = EXTRACT_PIXEL(tile, 7); if (col) bmap[0] = colbase + col;
 		col = EXTRACT_PIXEL(tile, 6); if (col) bmap[1] = colbase + col;
@@ -1363,11 +1760,25 @@ static void drawline_sprite(int line, UINT16 *bmap, int priority, UINT8 *spriteb
 	int spritewidth  = (((spritebase[2] & 0x0c) >> 2) + 1) * 8;
 	int spriteattr, patno, patflip, patline, colbase, x;
 
+	UINT16 keep[32], *line_base = bmap;
+	int keep_from = 0, keep_to = 0;
+
 	/* skip if out of range */
 	if (line < spriteypos || line >= spriteypos + spriteheight)
 		return;
 	if (spritexpos + spritewidth < 0 || spritexpos >= BITMAP_WIDTH)
 		return;
+
+	/* only the first sprite_draw_limit pixels (sprite_line_limits) */
+	if (sprite_draw_limit >= 0 && sprite_draw_limit < spritewidth)
+	{
+		keep_from = spritexpos + sprite_draw_limit;
+		keep_to = spritexpos + spritewidth;
+		if (keep_from < 0) keep_from = 0;
+		if (keep_to > BITMAP_WIDTH) keep_to = BITMAP_WIDTH;
+		for (x = keep_from; x < keep_to; x++)
+			keep[x - keep_from] = bmap[x];
+	}
 
 	/* extract the remaining data */
 	spriteattr = (spritebase[4] << 8) | spritebase[5];
@@ -1376,7 +1787,10 @@ static void drawline_sprite(int line, UINT16 *bmap, int priority, UINT8 *spriteb
 	patline    = line - spriteypos;
 
 	/* determine the color base */
-	colbase = vdp.sp_pal_lookup[(spriteattr >> 13) & 3];
+	if (raw_mode)
+		colbase = (((spriteattr >> 13) & 3) << 4) | ((spriteattr & 0x8000) ? 0x80 : 0x40);
+	else
+		colbase = vdp.sp_pal_lookup[(spriteattr >> 13) & 3];
 
 	/* adjust for the X position */
 	spritewidth >>= 3;
@@ -1430,6 +1844,10 @@ static void drawline_sprite(int line, UINT16 *bmap, int priority, UINT8 *spriteb
 			}
 			break;
 	}
+
+	/* put back the pixels past the limit */
+	for (x = keep_from; x < keep_to; x++)
+		line_base[x] = keep[x - keep_from];
 }
 
 /******************************************************************************/

@@ -64,6 +64,9 @@ int system18_vdp_start(void)
 	intf.display_enable   = 1;
 	intf.set_visible_area = 0;
 	intf.irq_update       = NULL;
+	intf.shadow_base      = 0;	/* no shadow/highlight mode */
+	intf.hilite_base      = 0;
+	intf.black_pen        = -1;
 	return segavdp_start(&intf);
 }
 
