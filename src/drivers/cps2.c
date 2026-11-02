@@ -837,6 +837,61 @@ INPUT_PORTS_START( cps2_2p2b )
     PORT_BIT( 0x8000, IP_ACTIVE_LOW, IPT_UNUSED )
 INPUT_PORTS_END
 
+/* Super Puzzle Fighter II Turbo X" (spf2enh): cps2_2p2b plus buttons 3 and 4,
+   wired as on the 6-button harness (cps2_2p6b); the hack steps through the
+   Versus stage selector with them (button 3 next, button 4 previous) */
+INPUT_PORTS_START( spf2enh )
+    PORT_START      /* IN0 (0x00) */
+    PORT_BIT( 0x0001, IP_ACTIVE_LOW, IPT_JOYSTICK_RIGHT | IPF_8WAY | IPF_PLAYER1 )
+    PORT_BIT( 0x0002, IP_ACTIVE_LOW, IPT_JOYSTICK_LEFT  | IPF_8WAY | IPF_PLAYER1 )
+    PORT_BIT( 0x0004, IP_ACTIVE_LOW, IPT_JOYSTICK_DOWN  | IPF_8WAY | IPF_PLAYER1 )
+    PORT_BIT( 0x0008, IP_ACTIVE_LOW, IPT_JOYSTICK_UP    | IPF_8WAY | IPF_PLAYER1 )
+    PORT_BIT( 0x0010, IP_ACTIVE_LOW, IPT_BUTTON1 | IPF_PLAYER1 )
+    PORT_BIT( 0x0020, IP_ACTIVE_LOW, IPT_BUTTON2 | IPF_PLAYER1 )
+    PORT_BIT( 0x0040, IP_ACTIVE_LOW, IPT_BUTTON3 | IPF_PLAYER1 )
+    PORT_BIT( 0x0080, IP_ACTIVE_LOW, IPT_UNUSED )
+    PORT_BIT( 0x0100, IP_ACTIVE_LOW, IPT_JOYSTICK_RIGHT | IPF_8WAY | IPF_PLAYER2 )
+    PORT_BIT( 0x0200, IP_ACTIVE_LOW, IPT_JOYSTICK_LEFT  | IPF_8WAY | IPF_PLAYER2 )
+    PORT_BIT( 0x0400, IP_ACTIVE_LOW, IPT_JOYSTICK_DOWN  | IPF_8WAY | IPF_PLAYER2 )
+    PORT_BIT( 0x0800, IP_ACTIVE_LOW, IPT_JOYSTICK_UP    | IPF_8WAY | IPF_PLAYER2 )
+    PORT_BIT( 0x1000, IP_ACTIVE_LOW, IPT_BUTTON1 | IPF_PLAYER2 )
+    PORT_BIT( 0x2000, IP_ACTIVE_LOW, IPT_BUTTON2 | IPF_PLAYER2 )
+    PORT_BIT( 0x4000, IP_ACTIVE_LOW, IPT_BUTTON3 | IPF_PLAYER2 )
+    PORT_BIT( 0x8000, IP_ACTIVE_LOW, IPT_UNUSED )
+
+    PORT_START      /* IN1 (0x10) */
+    PORT_BIT( 0x0001, IP_ACTIVE_LOW, IPT_BUTTON4 | IPF_PLAYER1 )
+    PORT_BIT( 0x0002, IP_ACTIVE_LOW, IPT_UNUSED )
+    PORT_BIT( 0x0004, IP_ACTIVE_LOW, IPT_UNUSED )
+    PORT_BIT( 0x0008, IP_ACTIVE_LOW, IPT_UNUSED )
+    PORT_BIT( 0x0010, IP_ACTIVE_LOW, IPT_BUTTON4 | IPF_PLAYER2 )
+    PORT_BIT( 0x0020, IP_ACTIVE_LOW, IPT_UNUSED )
+    PORT_BIT( 0x0040, IP_ACTIVE_LOW, IPT_UNUSED )
+    PORT_BIT( 0x0080, IP_ACTIVE_LOW, IPT_UNUSED )
+    PORT_BIT( 0x0100, IP_ACTIVE_LOW, IPT_UNUSED )
+    PORT_BIT( 0x0200, IP_ACTIVE_LOW, IPT_UNUSED )
+    PORT_BIT( 0x0400, IP_ACTIVE_LOW, IPT_UNUSED )
+    PORT_BIT( 0x0800, IP_ACTIVE_LOW, IPT_UNUSED )
+    PORT_BIT( 0x1000, IP_ACTIVE_LOW, IPT_UNUSED )
+    PORT_BIT( 0x2000, IP_ACTIVE_LOW, IPT_UNUSED )
+    PORT_BIT( 0x4000, IP_ACTIVE_LOW, IPT_UNUSED )
+    PORT_BIT( 0x8000, IP_ACTIVE_LOW, IPT_UNUSED )
+
+    PORT_START      /* IN2 (0x20) */
+    PORT_BIT( 0x0001, IP_ACTIVE_LOW, IPT_SPECIAL )   /* EEPROM bit */
+	PORT_BITX(0x0002, IP_ACTIVE_LOW, IPT_SERVICE, DEF_STR( Service_Mode ), KEYCODE_F2, IP_JOY_NONE )
+    PORT_BIT( 0x0004, IP_ACTIVE_LOW, IPT_SERVICE1 )
+    PORT_BIT( 0x00f8, IP_ACTIVE_LOW, IPT_UNUSED )
+    PORT_BIT( 0x0100, IP_ACTIVE_LOW, IPT_START1 )
+    PORT_BIT( 0x0200, IP_ACTIVE_LOW, IPT_START2 )
+    PORT_BIT( 0x0400, IP_ACTIVE_LOW, IPT_UNUSED )
+    PORT_BIT( 0x0800, IP_ACTIVE_LOW, IPT_UNUSED )
+    PORT_BIT( 0x1000, IP_ACTIVE_LOW, IPT_COIN1 )
+    PORT_BIT( 0x2000, IP_ACTIVE_LOW, IPT_COIN2 )
+    PORT_BIT( 0x4000, IP_ACTIVE_LOW, IPT_UNUSED )
+    PORT_BIT( 0x8000, IP_ACTIVE_LOW, IPT_UNUSED )
+INPUT_PORTS_END
+
 INPUT_PORTS_START( cybots )
     PORT_START      /* IN0 (0x00) */
     PORT_BIT( 0x0001, IP_ACTIVE_LOW, IPT_JOYSTICK_RIGHT | IPF_8WAY | IPF_PLAYER1 )
@@ -12377,7 +12432,7 @@ GAME( 1996, spf2xj,     spf2t,    cps2,     cps2_2p2b,  my_cps2,     ROT0,   "Ca
 GAME( 1996, spf2ta,     spf2t,    cps2,     cps2_2p2b,  my_cps2,     ROT0,   "Capcom", "Super Puzzle Fighter II Turbo (Asia 960529)")
 GAME( 1996, spf2th,     spf2t,    cps2,     cps2_2p2b,  my_cps2,     ROT0,   "Capcom", "Super Puzzle Fighter II Turbo (Hispanic 960531)")
 GAME( 2021, spf2xpri,   spf2t,    cps2,     cps2_2p2b,  my_cps2,     ROT0,   "hack",   "Super Puzzle Fighter 2 X'")
-GAME( 2026, spf2enh,    spf2t,    cps2,     cps2_2p2b,  my_cps2,     ROT0,   "hack",   "Super Puzzle Fighter II Turbo X\" (Enhanced)")
+GAME( 2026, spf2enh,    spf2t,    cps2,     spf2enh,    my_cps2,     ROT0,   "hack",   "Super Puzzle Fighter II Turbo X\" (Enhanced)")
 GAME( 1996, megaman2,   0,        cps2,     cps2_2p3b,  my_cps2,     ROT0,   "Capcom", "Mega Man 2: The Power Fighters (USA 960708)")
 GAME( 1996, megaman2a,  megaman2, cps2,     cps2_2p3b,  my_cps2,     ROT0,   "Capcom", "Mega Man 2: The Power Fighters (Asia 960708)")
 GAME( 1996, rockman2j,  megaman2, cps2,     cps2_2p3b,  my_cps2,     ROT0,   "Capcom", "Rockman 2: The Power Fighters (Japan 960708)")
