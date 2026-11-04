@@ -69,6 +69,7 @@ SOURCES_C += \
 
 SOURCES_C += \
 	$(CORE_DIR)/machine/fd1089.c \
+	$(CORE_DIR)/machine/fd1094.c \
 	$(CORE_DIR)/machine/6522via.c \
 	$(CORE_DIR)/machine/6532riot.c \
 	$(CORE_DIR)/machine/6821pia.c \
@@ -80,6 +81,7 @@ SOURCES_C += \
 	$(CORE_DIR)/machine/eeprom.c \
 	$(CORE_DIR)/machine/idectrl.c \
 	$(CORE_DIR)/machine/intelfsh.c \
+	$(CORE_DIR)/machine/ds2404.c \
 	$(CORE_DIR)/machine/ataflash.c \
 	$(CORE_DIR)/machine/mathbox.c \
 	$(CORE_DIR)/machine/mb87078.c \
@@ -129,6 +131,7 @@ CPUS+=I186@
 CPUS+=V20@
 CPUS+=V30@
 CPUS+=V33@
+CPUS+=V25@
 CPUS+=V60@
 CPUS+=V70@
 CPUS+=I8035@
@@ -183,6 +186,7 @@ CPUS+=ADSP2115@
 CPUS+=ADSP2181@
 CPUS+=PSXCPU@
 CPUS+=H83002@
+CPUS+=I386@
 CPUS+=MN10200@
 CPUS+=M37702@
 CPUS+=ASAP@
@@ -195,6 +199,7 @@ CPUS+=R3000@
 CPUS+=R4600@
 CPUS+=R5000@
 CPUS+=SH2@
+CPUS+=SH3@
 CPUS+=DSP32C@
 #CPUS+=PIC16C54@
 CPUS+=PIC16C55@
@@ -494,7 +499,7 @@ SOURCES_C += \
 	$(CORE_DIR)/vidhrdw/mitchell_vidhrdw.c $(CORE_DIR)/drivers/mitchell.c \
 	$(CORE_DIR)/vidhrdw/cbasebal_vidhrdw.c $(CORE_DIR)/drivers/cbasebal.c \
 	$(CORE_DIR)/vidhrdw/cps1_vidhrdw.c $(CORE_DIR)/drivers/cps1.c $(CORE_DIR)/drivers/cps2.c $(CORE_DIR)/machine/cps2crypt.c\
-	$(CORE_DIR)/drivers/zn.c $(CORE_DIR)/sndhrdw/taitozoom.c $(CORE_DIR)/sound/zsg2.c $(CORE_DIR)/cpu/tms57002/tms57002.c \
+	$(CORE_DIR)/drivers/zn.c $(CORE_DIR)/sndhrdw/acclaim_rax.c $(CORE_DIR)/sndhrdw/taitozoom.c $(CORE_DIR)/sound/zsg2.c $(CORE_DIR)/cpu/tms57002/tms57002.c \
 	$(CORE_DIR)/drivers/cps3.c $(CORE_DIR)/sndhrdw/cps3_sndhrdw.c \
 	$(CORE_DIR)/vidhrdw/tms34061_vidhrdw.c \
 	$(CORE_DIR)/machine/capbowl_machine.c $(CORE_DIR)/vidhrdw/capbowl_vidhrdw.c $(CORE_DIR)/drivers/capbowl.c \
@@ -524,10 +529,10 @@ SOURCES_C += \
 	$(CORE_DIR)/drivers/system24.c $(CORE_DIR)/machine/system24_machine.c $(CORE_DIR)/vidhrdw/system24_vidhrdw.c \
 	$(CORE_DIR)/vidhrdw/segaic24.c $(CORE_DIR)/vidhrdw/segas18.c \
 	$(CORE_DIR)/drivers/segas32.c $(CORE_DIR)/machine/segas32.c $(CORE_DIR)/vidhrdw/segas32.c \
-	$(CORE_DIR)/vidhrdw/segac2_vidhrdw.c $(CORE_DIR)/drivers/segac2.c \
+	$(CORE_DIR)/vidhrdw/segavdp.c $(CORE_DIR)/vidhrdw/segac2_vidhrdw.c $(CORE_DIR)/machine/megadriv.c $(CORE_DIR)/drivers/segac2.c $(CORE_DIR)/drivers/megaplay.c $(CORE_DIR)/drivers/megatech.c $(CORE_DIR)/drivers/megadriv_acbl.c $(CORE_DIR)/drivers/megadriv_ybox.c $(CORE_DIR)/drivers/megadriv_sunmix.c \
 	$(CORE_DIR)/drivers/stv.c $(CORE_DIR)/drivers/stvhacks.c $(CORE_DIR)/machine/stvcd.c \
 	$(CORE_DIR)/machine/scudsp.c \
-	$(CORE_DIR)/vidhrdw/stvvdp1_vidhrdw.c $(CORE_DIR)/vidhrdw/stvvdp2_vidhrdw.c \
+	$(CORE_DIR)/vidhrdw/stvvid.c \
 	$(CORE_DIR)/vidhrdw/deniam_vidhrdw.c $(CORE_DIR)/drivers/deniam.c \
 	$(CORE_DIR)/machine/btime_machine.c $(CORE_DIR)/vidhrdw/btime_vidhrdw.c $(CORE_DIR)/drivers/btime.c \
 	$(CORE_DIR)/machine/decocass_machine.c $(CORE_DIR)/vidhrdw/decocass_vidhrdw.c $(CORE_DIR)/drivers/decocass.c \
@@ -819,6 +824,7 @@ SOURCES_C += \
 	$(CORE_DIR)/vidhrdw/raiden_vidhrdw.c $(CORE_DIR)/drivers/raiden.c $(CORE_DIR)/drivers/raiden2.c \
 	$(CORE_DIR)/vidhrdw/dcon_vidhrdw.c $(CORE_DIR)/drivers/dcon.c \
 	$(CORE_DIR)/vidhrdw/sengokmj_vidhrdw.c $(CORE_DIR)/drivers/sengokmj.c \
+	$(CORE_DIR)/machine/seibuspi_machine.c $(CORE_DIR)/vidhrdw/seibuspi_vidhrdw.c $(CORE_DIR)/drivers/seibuspi.c \
 	$(CORE_DIR)/sndhrdw/t5182.c \
 	$(CORE_DIR)/vidhrdw/mustache_vidhrdw.c $(CORE_DIR)/drivers/mustache.c \
 	$(CORE_DIR)/vidhrdw/darkmist_vidhrdw.c $(CORE_DIR)/drivers/darkmist.c \
@@ -1058,11 +1064,14 @@ SOURCES_C += \
 	$(CORE_DIR)/machine/model1_machine.c $(CORE_DIR)/vidhrdw/model1_vidhrdw.c $(CORE_DIR)/drivers/model1.c \
 	$(CORE_DIR)/machine/model2_machine.c $(CORE_DIR)/vidhrdw/model2_vidhrdw.c $(CORE_DIR)/drivers/model2.c \
 	$(CORE_DIR)/sndhrdw/segadsb.c $(CORE_DIR)/sound/mpeg_audio.c \
+	$(CORE_DIR)/drivers/cv1k.c $(CORE_DIR)/vidhrdw/cv1k_vidhrdw.c $(CORE_DIR)/sound/ymz770.c \
 	$(CORE_DIR)/machine/sega315_5881.c $(CORE_DIR)/machine/sega315_5838.c \
 	$(CORE_DIR)/drivers/calorie.c \
+    $(CORE_DIR)/drivers/hvyunit.c \
 	$(CORE_DIR)/machine/mc8123.c \
 	$(CORE_DIR)/machine/namcoio_machine.c \
-	$(CORE_DIR)/drivers/tatsumi.c $(CORE_DIR)/vidhrdw/tatsumi.c $(CORE_DIR)/machine/tatsumi.c
+	$(CORE_DIR)/drivers/tatsumi.c $(CORE_DIR)/vidhrdw/tatsumi.c $(CORE_DIR)/machine/tatsumi.c \
+	$(CORE_DIR)/drivers/tx1.c $(CORE_DIR)/vidhrdw/tx1_vidhrdw.c $(CORE_DIR)/machine/tx1_machine.c $(CORE_DIR)/sndhrdw/tx1_sndhrdw.c
 
 
 
@@ -1371,6 +1380,15 @@ CPUDEFS += -DHAS_V33=1
 HAS_V30=1
 else
 CPUDEFS += -DHAS_V33=0
+endif
+
+CPU=$(strip $(findstring V25@,$(CPUS)))
+ifneq ($(CPU),)
+OBJDIRS += $(CORE_DIR)/cpu/nec
+CPUDEFS += -DHAS_V25=1
+SOURCES_C += $(CORE_DIR)/cpu/nec/v25.c
+else
+CPUDEFS += -DHAS_V25=0
 endif
 
 ifeq ($(HAS_V30),1)
@@ -1941,6 +1959,15 @@ else
 CPUDEFS += -DHAS_H83002=0
 endif
 
+CPU=$(strip $(findstring I386@,$(CPUS)))
+ifneq ($(CPU),)
+OBJDIRS += $(CORE_DIR)/cpu/i386
+CPUDEFS += -DHAS_I386=1
+SOURCES_C += $(CORE_DIR)/cpu/i386/i386.c
+else
+CPUDEFS += -DHAS_I386=0
+endif
+
 CPU=$(strip $(findstring MN10200@,$(CPUS)))
 ifneq ($(CPU),)
 OBJDIRS += $(CORE_DIR)/cpu/mn10200
@@ -2079,6 +2106,15 @@ SOURCES_C += $(CORE_DIR)/cpu/sh2/sh2dasm.c
 endif
 else
 CPUDEFS += -DHAS_SH2=0
+endif
+
+CPU=$(strip $(findstring SH3@,$(CPUS)))
+ifneq ($(CPU),)
+OBJDIRS += $(CORE_DIR)/cpu/sh3
+CPUDEFS += -DHAS_SH3=1
+SOURCES_C += $(CORE_DIR)/cpu/sh3/sh3.c
+else
+CPUDEFS += -DHAS_SH3=0
 endif
 
 CPU=$(strip $(findstring DSP32C@,$(CPUS)))
@@ -2815,6 +2851,12 @@ SOURCES_C += \
 
 # sljit: run-time code generator of the MIPS recompilers (empty where they are not supported)
 SOURCES_C += $(CORE_DIR)/lib/sljit/sljit_mame.c
+
+# threads (libretro-common rthreads, set by the platform: see Makefile): the ST-V threaded video option
+ifeq ($(HAVE_THREADS),1)
+COREDEFINES += -DHAVE_THREADS
+SOURCES_C += $(LIBRETRO_COMM_DIR)/rthreads/rthreads.c
+endif
 
 ifeq ($(STATIC_LINKING),1)
 else

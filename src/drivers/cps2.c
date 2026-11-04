@@ -127,14 +127,13 @@ extern VIDEO_START( cps2 );
 extern int scanline1;
 extern int scanline2;
 extern int scancalls;
+extern int scancount;
 void cps2_objram_latch(void);
 void cps2_set_sprite_priorities(void);
 
 
 static INTERRUPT_GEN( cps2_interrupt )
 {
-	static int scancount;
-
 	/* 2 is vblank, 4 is some sort of scanline interrupt, 6 is both at the same time. */
 
 	if(scancount >= 261)
@@ -1390,9 +1389,9 @@ static int cps2turbo_music_start(int side, int tune)
 		return 0;
 	}
 	if (side)
-		sample_set_stereo_volume(1, 0, 255);
+		sample_set_stereo_volume(1, 0, 100);
 	else
-		sample_set_stereo_volume(0, 255, 0);
+		sample_set_stereo_volume(0, 100, 0);
 	return 1;
 }
 

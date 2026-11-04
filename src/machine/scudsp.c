@@ -1,5 +1,7 @@
 #include "driver.h"
+#include "state.h"
 #include "machine/scudsp.h"
+#include "cpu/sh2/sh2.h"
 
 /*SCU DSP functions */
 /*V0.03*/
@@ -75,10 +77,13 @@ extern data32_t* stv_scu;
 static UINT32 opcode;
 static UINT8 update_mul = 0;
 
-#define DEBUG_DSP
+/* writes dsp.log in the current directory, for debugging only */
+/*#define DEBUG_DSP*/
 
+#ifdef DEBUG_DSP
 static	char dasm_buffer[100];
 static FILE *log_file = NULL;
+#endif
 void dsp_dasm_opcode( UINT32 op, char *buffer );
 
 
@@ -266,12 +271,61 @@ static UINT32 dsp_get_mem_source_dma( UINT32 memcode, UINT32 counter )
 	return 0;
 }
 
+/* the save state: the 48-bit MUL and ALU go as two 32-bit halves */
+static UINT32 dsp_ss_mul[2], dsp_ss_alu[2];
+
+static void scudsp_presave(void)
+{
+	dsp_ss_mul[0] = (UINT32)(dsp_reg.mul >> 32);
+	dsp_ss_mul[1] = (UINT32)dsp_reg.mul;
+	dsp_ss_alu[0] = (UINT32)(dsp_reg.alu >> 32);
+	dsp_ss_alu[1] = (UINT32)dsp_reg.alu;
+}
+
+static void scudsp_postload(void)
+{
+	dsp_reg.mul = ((UINT64)dsp_ss_mul[0] << 32) | dsp_ss_mul[1];
+	dsp_reg.alu = ((UINT64)dsp_ss_alu[0] << 32) | dsp_ss_alu[1];
+}
+
+void scudsp_state_save_register(void)
+{
+	state_save_register_UINT8 ("scudsp", 0, "pc", &dsp_reg.pc, 1);
+	state_save_register_UINT8 ("scudsp", 0, "delay", &dsp_reg.delay, 1);
+	state_save_register_UINT8 ("scudsp", 0, "top", &dsp_reg.top, 1);
+	state_save_register_UINT16("scudsp", 0, "lop", &dsp_reg.lop, 1);
+	state_save_register_UINT8 ("scudsp", 0, "ct0", &dsp_reg.ct0, 1);
+	state_save_register_UINT8 ("scudsp", 0, "ct1", &dsp_reg.ct1, 1);
+	state_save_register_UINT8 ("scudsp", 0, "ct2", &dsp_reg.ct2, 1);
+	state_save_register_UINT8 ("scudsp", 0, "ct3", &dsp_reg.ct3, 1);
+	state_save_register_UINT32("scudsp", 0, "md0", dsp_reg.md0, 0x40);
+	state_save_register_UINT32("scudsp", 0, "md1", dsp_reg.md1, 0x40);
+	state_save_register_UINT32("scudsp", 0, "md2", dsp_reg.md2, 0x40);
+	state_save_register_UINT32("scudsp", 0, "md3", dsp_reg.md3, 0x40);
+	state_save_register_UINT8 ("scudsp", 0, "ra", &dsp_reg.ra, 1);
+	state_save_register_UINT32("scudsp", 0, "rx", &dsp_reg.rx, 1);
+	state_save_register_UINT32("scudsp", 0, "mul", dsp_ss_mul, 2);
+	state_save_register_UINT32("scudsp", 0, "ry", &dsp_reg.ry, 1);
+	state_save_register_UINT32("scudsp", 0, "alu", dsp_ss_alu, 2);
+	state_save_register_UINT16("scudsp", 0, "ph", &dsp_reg.ph, 1);
+	state_save_register_UINT32("scudsp", 0, "pl", &dsp_reg.pl, 1);
+	state_save_register_UINT16("scudsp", 0, "ach", &dsp_reg.ach, 1);
+	state_save_register_UINT32("scudsp", 0, "acl", &dsp_reg.acl, 1);
+	state_save_register_UINT32("scudsp", 0, "ra0", &dsp_reg.ra0, 1);
+	state_save_register_UINT32("scudsp", 0, "wa0", &dsp_reg.wa0, 1);
+	state_save_register_UINT32("scudsp", 0, "internal_prg", dsp_reg.internal_prg, 0x100);
+	state_save_register_UINT32("scudsp", 0, "opcode", &opcode, 1);
+	state_save_register_UINT8 ("scudsp", 0, "update_mul", &update_mul, 1);
+	state_save_register_func_presave(scudsp_presave);
+	state_save_register_func_postload(scudsp_postload);
+}
+
 void dsp_prg_ctrl(UINT32 data)
 {
 	if(LEF) dsp_reg.pc = (data & 0xff);
 	if(EXF) dsp_execute_program();
-	if(EF && (!(stv_scu[40] & 0x0020)))
-		cpu_set_irq_line_and_vector(0, 0xa, HOLD_LINE , 0x45);
+	if(EF)
+		stv_scu_raise_irq(5);	/* DSP end */
 }
 
 void dsp_prg_data(UINT32 data)
@@ -630,6 +684,8 @@ static void dsp_dma( void )
 		for ( counter = 0; counter < transfer_cnt; counter++ )
 		{
 			cpu_writemem32bedw_dword( dest, cpu_readmem32bew_word( dsp_get_mem_source_dma( dsp_mem, counter ) ) );
+			if ( sh2_jit_code_present )
+				sh2_jit_ram_written( dest, 4 );
 			dest += add;
 		}
 
@@ -698,6 +754,7 @@ static void dsp_loop( void )
 	}
 }
 
+#ifdef DEBUG_DSP
 static void dsp_dump_mem( FILE *f )
 {
     UINT16 i;
@@ -724,12 +781,15 @@ static void dsp_dump_mem( FILE *f )
 	}
 	fprintf( f, "}\n" );
 }
+#endif
 
 void dsp_execute_program()
 {
 	UINT32 cycles_run = 0;
 	UINT8 cont = 1;
+#ifdef DEBUG_DSP
 	UINT16 i;
+#endif
 
 #ifdef DEBUG_DSP
     if ( log_file == NULL )
@@ -758,7 +818,9 @@ void dsp_execute_program()
 			dsp_reg.pc++;
 		}
 
+#ifdef DEBUG_DSP
 		dsp_dasm_opcode( opcode, dasm_buffer );
+#endif
 
 		switch( (opcode & 0xc0000000) >> 30 ) 
 		{

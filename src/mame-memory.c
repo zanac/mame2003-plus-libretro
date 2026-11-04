@@ -259,7 +259,8 @@ int memory_init(void)
 	if (!populate_ports())
 		return 0;
 
-	register_banks();
+	/* the banks are registered for the save states by memory_register_banks(),
+	   after the driver init: a driver often points them at its own RAM there */
 
 #ifdef MEM_DUMP
 	/* dump the final memory configuration */
@@ -774,6 +775,53 @@ void *memory_get_read_ptr(int cpunum, offs_t offset)
 		return NULL;
 	offset -= handlist[entry].offset;
 	return &cpu_bankbase[entry][offset];
+}
+
+
+/*-------------------------------------------------
+	memory_get_read_range - like memory_get_read_ptr,
+	also giving the range of addresses around the
+	offset read from the same memory (*start, *len,
+	masked addresses); NULL when the offset is not
+	plain memory
+-------------------------------------------------*/
+
+void *memory_get_read_range(int cpunum, offs_t offset, offs_t *start, offs_t *len)
+{
+	struct memport_data *memport = &cpudata[cpunum].mem;
+	struct handler_data *handlist = (memport->dbits == 32) ? rmemhandler32 : (memport->dbits == 16) ? rmemhandler16 : rmemhandler8;
+	UINT8 minbits = memport->abits - memport->ebits;
+	int l2bits = LEVEL2_BITS(memport->abits - minbits);
+	UINT8 entry;
+	offs_t first, last;
+
+	offset &= memport->mask;
+	entry = memport->read.table[LEVEL1_INDEX(offset, memport->abits, minbits)];
+	if (entry >= SUBTABLE_BASE)
+	{
+		/* the run of the same entry in the subtable, at most 4 KB each side */
+		UINT8 sub = entry;
+		offs_t base = offset & ~(((offs_t)1 << (l2bits + minbits)) - 1);
+		offs_t i = (offset - base) >> minbits, n = (offs_t)1 << l2bits, j;
+		offs_t lim = 0x1000 >> minbits;
+		entry = memport->read.table[LEVEL2_INDEX(sub, offset, memport->abits, minbits)];
+		for (j = i; j > 0 && i - j < lim && memport->read.table[LEVEL2_INDEX(sub, base + ((j - 1) << minbits), memport->abits, minbits)] == entry; j--) ;
+		first = base + (j << minbits);
+		for (j = i; j + 1 < n && j - i < lim && memport->read.table[LEVEL2_INDEX(sub, base + ((j + 1) << minbits), memport->abits, minbits)] == entry; j++) ;
+		last = base + (j << minbits) + (((offs_t)1 << minbits) - 1);
+	}
+	else
+	{
+		first = offset & ~(((offs_t)1 << (l2bits + minbits)) - 1);
+		last = first + (((offs_t)1 << (l2bits + minbits)) - 1);
+	}
+
+	/* 8-bit case: RAM/ROM/RAMROM */
+	if (entry > STATIC_RAM || (minbits == 0 && entry != STATIC_RAM))
+		return NULL;
+	*start = first;
+	*len = last - first + 1;
+	return &cpu_bankbase[entry][first - handlist[entry].offset];
 }
 
 
@@ -1641,11 +1689,13 @@ void register_banks(void)
 	int cpunum, i;
 	int banksize[MAX_BANKS];
 	int bankcpu[MAX_BANKS];
+	int bankwrite[MAX_BANKS]; /* bank appears in a write map */
 
 	for (i=0; i<MAX_BANKS; i++)
 	{
 		banksize[i] = 0;
 		bankcpu[i] = -1;
+		bankwrite[i] = 0;
 	}
 
 	/* loop over CPUs */
@@ -1661,7 +1711,8 @@ void register_banks(void)
 			UINT32 size = memory_region_length(REGION_CPU1 + cpunum);
 			if (size > (1<<bits))
 				size = 1 << bits;
-			rg_add_entry(0, size-1, RG_SAVE_READ|RG_SAVE_WRITE);
+			if (size > 0)	/* a CPU with no region (e.g. a program uploaded in its RAM) */
+				rg_add_entry(0, size-1, RG_SAVE_READ|RG_SAVE_WRITE);
 		}
 
 
@@ -1725,6 +1776,7 @@ void register_banks(void)
 						if (banksize[HANDLER_TO_BANK(h)] < size)
 							banksize[HANDLER_TO_BANK(h)] = size;
 						bankcpu[HANDLER_TO_BANK(h)] = cpunum;
+						bankwrite[HANDLER_TO_BANK(h)] = 1;
 						mode = RG_DROP_WRITE;;
 					}
 					else
@@ -1769,6 +1821,14 @@ void register_banks(void)
 
 	for (i=0; i<MAX_BANKS; i++)
 		if (banksize[i])
+		{
+			/* a large bank that no write map touches is ROM (ST-V cart 48MB, CAGE sound ROM 18MB).
+			   Its bytes never change, so keep them out of the save state (netplay keeps dozens of states). */
+			if (!bankwrite[i] && banksize[i] >= 0x100000)
+			{
+				log_cb(RETRO_LOG_INFO, LOGPRE "read-only bank %d (%d bytes) left out of the save state\n", i, banksize[i]);
+				continue;
+			}
 			switch (cpunum_databus_width(bankcpu[i]))
 			{
 			case 8:
@@ -1781,6 +1841,7 @@ void register_banks(void)
 				state_save_register_UINT32("bank", i, "ram", (UINT32 *)cpu_bankbase[i], banksize[i]/4);
 				break;
 			}
+		}
 
 }
 
@@ -3076,3 +3137,11 @@ static void verify_masks(void)
 	log_cb(RETRO_LOG_INFO, LOGPRE "mame-memory: Busted entries that are static = %d\n", static_count);
 }
 #endif
+
+
+/* the save state entries of the memory banks, once the driver init has
+   pointed them where it wants them (see memory_init) */
+void memory_register_banks(void)
+{
+	register_banks();
+}

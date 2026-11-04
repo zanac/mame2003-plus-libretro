@@ -67,6 +67,9 @@
 #if (HAS_V20 || HAS_V30 || HAS_V33)
 #include "cpu/nec/necintrf.h"
 #endif
+#if (HAS_V25)
+#include "cpu/nec/v25.h"
+#endif
 #if (HAS_V60 || HAS_V70)
 #include "cpu/v60/v60.h"
 #endif
@@ -151,6 +154,9 @@
 #if (HAS_H83002)
 #include "cpu/h83002/h83002.h"
 #endif
+#if (HAS_I386)
+#include "cpu/i386/i386.h"
+#endif
 #if (HAS_M37702)
 #include "cpu/m37710/m37710.h"
 #endif
@@ -177,6 +183,9 @@
 #endif
 #if (HAS_SH2)
 #include "cpu/sh2/sh2.h"
+#endif
+#if (HAS_SH3)
+#include "cpu/sh3/sh3.h"
 #endif
 #if (HAS_DSP32C)
 #include "cpu/dsp32/dsp32.h"
@@ -432,6 +441,9 @@ const struct cpu_interface cpuintrf[] =
 #if (HAS_V30)
 	CPU0(V30,	   v30, 	 1,255,1.00, 8, 20,	  0,20,LE,1, 5	),
 #endif
+#if (HAS_V25)
+	CPU0(V25,	   v25, 	 1,255,1.00, 8, 20,	  0,20,LE,1, 5	),
+#endif
 #if (HAS_V33)
 	CPU0(V33,	   v33, 	 1,255,1.00, 8, 20,	  0,20,LE,1, 5	),
 #endif
@@ -592,6 +604,9 @@ const struct cpu_interface cpuintrf[] =
 #if (HAS_H83002)
 	CPU0(H83002,   h8_3002,	 8,  0,1.00,16,24bew,  0,24,BE,2,10 ),
 #endif
+#if (HAS_I386)
+	CPU0(I386,     i386,	 1,  0,1.00,32,32ledw, 0,32,LE,1,15 ),
+#endif
 #if (HAS_MN10200)
 	CPU0(MN10200,  mn10200,	 4,  0,1.00,16,24lew,  0,24,LE,1, 6 ),
 #endif
@@ -644,6 +659,9 @@ const struct cpu_interface cpuintrf[] =
 #endif
 #if (HAS_SH2)
 	CPU4(SH2,	   sh2, 	16,  0,1.00,32,32bedw,   0,32,BE,2, 2  ),
+#endif
+#if (HAS_SH3)
+	CPU0(SH3,	   sh3, 	 4,  0,1.00,32,32bedw,   0,32,BE,2, 2  ),
 #endif
 #if (HAS_DSP32C)
 	#define dsp32c_ICount dsp32_icount
@@ -1266,6 +1284,15 @@ void *cpunum_get_context_ptr(int cpunum)
 {
 	VERIFY_CPUNUM(NULL, cpunum_get_context_ptr);
 	return (cpu_active_context[cpu[cpunum].family] == cpunum) ? NULL : cpu[cpunum].context;
+}
+
+/* the context buffer of a CPU, also from its init function (when the CPU
+   does not count in totalcpu yet), whether it is active or not */
+void *cpunum_get_context_buffer(int cpunum)
+{
+	if (cpunum < 0 || cpunum >= MAX_CPU)
+		return NULL;
+	return cpu[cpunum].context;
 }
 
 

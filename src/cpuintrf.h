@@ -103,6 +103,9 @@ enum
 #if (HAS_V30)
 	CPU_V30,
 #endif
+#if (HAS_V25)
+	CPU_V25,
+#endif
 #if (HAS_V33)
 	CPU_V33,
 #endif
@@ -262,6 +265,9 @@ enum
 #if (HAS_H83002)
 	CPU_H83002,
 #endif
+#if (HAS_I386)
+	CPU_I386,
+#endif
 #if (HAS_MN10200)
 	CPU_MN10200,
 #endif
@@ -301,6 +307,9 @@ enum
 #endif
 #if (HAS_SH2)
 	CPU_SH2,
+#endif
+#if (HAS_SH3)
+	CPU_SH3,
 #endif
 #if (HAS_DSP32C)
 	CPU_DSP32C,
@@ -627,6 +636,7 @@ void cpunum_write_bytes(int cpunum, offs_t address, const UINT8 *data, UINT32 co
 /* return a pointer to the saved context of a given CPU, or NULL if the
    context is active (and contained within the CPU core */
 void *cpunum_get_context_ptr(int cpunum);
+void *cpunum_get_context_buffer(int cpunum);
 
 /* return a pointer to the active cycle count table for a given CPU */
 const void *cpunum_get_cycle_table(int cpunum, int which);

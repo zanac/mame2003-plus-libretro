@@ -746,6 +746,39 @@ static int AY8910_init(const char *chip_name,int chip,
 
 	AY8910_set_clock(chip,clock);
 
+	/* the chip state, so that a loaded state plays the same sound again;
+	   the steps and volume table come from the clock and sample rate */
+	state_save_register_INT32("AY8910", chip, "register_latch", (INT32 *)&PSG->register_latch, 1);
+	state_save_register_UINT8("AY8910", chip, "Regs",           PSG->Regs, 16);
+	state_save_register_INT32("AY8910", chip, "lastEnable",     (INT32 *)&PSG->lastEnable, 1);
+	state_save_register_INT32("AY8910", chip, "PeriodA",        (INT32 *)&PSG->PeriodA, 1);
+	state_save_register_INT32("AY8910", chip, "PeriodB",        (INT32 *)&PSG->PeriodB, 1);
+	state_save_register_INT32("AY8910", chip, "PeriodC",        (INT32 *)&PSG->PeriodC, 1);
+	state_save_register_INT32("AY8910", chip, "PeriodN",        (INT32 *)&PSG->PeriodN, 1);
+	state_save_register_INT32("AY8910", chip, "PeriodE",        (INT32 *)&PSG->PeriodE, 1);
+	state_save_register_INT32("AY8910", chip, "CountA",         (INT32 *)&PSG->CountA, 1);
+	state_save_register_INT32("AY8910", chip, "CountB",         (INT32 *)&PSG->CountB, 1);
+	state_save_register_INT32("AY8910", chip, "CountC",         (INT32 *)&PSG->CountC, 1);
+	state_save_register_INT32("AY8910", chip, "CountN",         (INT32 *)&PSG->CountN, 1);
+	state_save_register_INT32("AY8910", chip, "CountE",         (INT32 *)&PSG->CountE, 1);
+	state_save_register_UINT32("AY8910", chip, "VolA",          (UINT32 *)&PSG->VolA, 1);
+	state_save_register_UINT32("AY8910", chip, "VolB",          (UINT32 *)&PSG->VolB, 1);
+	state_save_register_UINT32("AY8910", chip, "VolC",          (UINT32 *)&PSG->VolC, 1);
+	state_save_register_UINT32("AY8910", chip, "VolE",          (UINT32 *)&PSG->VolE, 1);
+	state_save_register_UINT8("AY8910", chip, "EnvelopeA",      &PSG->EnvelopeA, 1);
+	state_save_register_UINT8("AY8910", chip, "EnvelopeB",      &PSG->EnvelopeB, 1);
+	state_save_register_UINT8("AY8910", chip, "EnvelopeC",      &PSG->EnvelopeC, 1);
+	state_save_register_UINT8("AY8910", chip, "OutputA",        &PSG->OutputA, 1);
+	state_save_register_UINT8("AY8910", chip, "OutputB",        &PSG->OutputB, 1);
+	state_save_register_UINT8("AY8910", chip, "OutputC",        &PSG->OutputC, 1);
+	state_save_register_UINT8("AY8910", chip, "OutputN",        &PSG->OutputN, 1);
+	state_save_register_INT8("AY8910", chip, "CountEnv",        &PSG->CountEnv, 1);
+	state_save_register_UINT8("AY8910", chip, "Hold",           &PSG->Hold, 1);
+	state_save_register_UINT8("AY8910", chip, "Alternate",      &PSG->Alternate, 1);
+	state_save_register_UINT8("AY8910", chip, "Attack",         &PSG->Attack, 1);
+	state_save_register_UINT8("AY8910", chip, "Holding",        &PSG->Holding, 1);
+	state_save_register_INT32("AY8910", chip, "RNG",            (INT32 *)&PSG->RNG, 1);
+
 	return 0;
 }
 
@@ -799,7 +832,7 @@ int AY8910_sh_start_ym(const struct MachineSound *msound)
 /* optional: the internal counters of the SSG of a YM chip in save states.
    The YM postload rewrites the SSG registers, which restarts the envelope,
    so the counters are kept in a copy and put back after it. */
-#define AY_EXT_INT 12
+#define AY_EXT_INT 17
 #define AY_EXT_U8 13
 static INT32 ay_ext_int[MAX_8910][AY_EXT_INT];
 static UINT8 ay_ext_u8[MAX_8910][AY_EXT_U8];
@@ -817,6 +850,10 @@ static void AY8910_ext_presave(void)
 		i[3] = PSG->CountN; i[4] = PSG->CountE; i[5] = PSG->RNG;
 		i[6] = PSG->VolA; i[7] = PSG->VolB; i[8] = PSG->VolC; i[9] = PSG->VolE;
 		i[10] = PSG->lastEnable; i[11] = PSG->register_latch;
+		/* the periods as they were made: a clock change (the YM prescaler)
+		   does not remake them, the register rewrite of the postload does */
+		i[12] = PSG->PeriodA; i[13] = PSG->PeriodB; i[14] = PSG->PeriodC;
+		i[15] = PSG->PeriodN; i[16] = PSG->PeriodE;
 		u[0] = PSG->EnvelopeA; u[1] = PSG->EnvelopeB; u[2] = PSG->EnvelopeC;
 		u[3] = PSG->OutputA; u[4] = PSG->OutputB; u[5] = PSG->OutputC; u[6] = PSG->OutputN;
 		u[7] = (UINT8)PSG->CountEnv; u[8] = PSG->Hold; u[9] = PSG->Alternate;
@@ -836,6 +873,8 @@ static void AY8910_ext_postload(void)
 		PSG->CountN = i[3]; PSG->CountE = i[4]; PSG->RNG = i[5];
 		PSG->VolA = i[6]; PSG->VolB = i[7]; PSG->VolC = i[8]; PSG->VolE = i[9];
 		PSG->lastEnable = i[10]; PSG->register_latch = i[11];
+		PSG->PeriodA = i[12]; PSG->PeriodB = i[13]; PSG->PeriodC = i[14];
+		PSG->PeriodN = i[15]; PSG->PeriodE = i[16];
 		PSG->EnvelopeA = u[0]; PSG->EnvelopeB = u[1]; PSG->EnvelopeC = u[2];
 		PSG->OutputA = u[3]; PSG->OutputB = u[4]; PSG->OutputC = u[5]; PSG->OutputN = u[6];
 		PSG->CountEnv = (signed char)u[7]; PSG->Hold = u[8]; PSG->Alternate = u[9];

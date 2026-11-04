@@ -100,7 +100,9 @@ endif
 ifeq ($(platform), unix)
 	TARGET = $(TARGET_NAME)_libretro.so
 	fpic = -fPIC
-	CFLAGS += $(fpic)
+	# only the retro_* entry points (RETRO_API) leave the library: the rest is
+	# reached directly instead of through the GOT and PLT
+	CFLAGS += $(fpic) -fvisibility=hidden
 	LDFLAGS += $(fpic) -shared -Wl,--version-script=link.T
 
 # Linux Portable
@@ -828,6 +830,14 @@ ifeq (,$(findstring msvc,$(platform)))
 	CFLAGS += -Werror=vla -Werror=declaration-after-statement
 endif
 
+# no fused multiply-add: a*b+c rounded once (FMA) on AArch64, ARMv7 VFPv4
+# and PowerPC gives other results than x86, where it is rounded twice;
+# with it off the floating point results are the same on every host
+# (netplay between them, save states and RunAhead)
+ifeq (,$(findstring msvc,$(platform)))
+	CFLAGS += -ffp-contract=off
+endif
+
 # Required for RZIP support in cheat.c
 CFLAGS += -DHAVE_ZLIB
 
@@ -862,6 +872,24 @@ endif
 
 ifeq ($(HAVE_ARMv6),1)
 	CFLAGS += -DHAVE_ARMv6
+endif
+
+# threads (libretro-common rthreads), as the other libretro cores do (beetle-psx):
+# on by default, off where there is no thread library, and on the MSVC builds
+# (the ST-V threaded video needs MSVC 2015's thread-local storage, the
+# buildbot's MSVC lanes are 2005 and 2010: nothing would use the threads)
+HAVE_THREADS ?= 1
+ifneq (,$(filter $(platform), emscripten linux-portable ngc wii wiiu ps2 ps3 psl1ght psp1 ctr vita))
+	HAVE_THREADS = 0
+endif
+ifneq (,$(findstring msvc,$(platform)))
+	HAVE_THREADS = 0
+endif
+ifeq ($(HAVE_THREADS),1)
+	# pthreads are in the C library on Darwin and Android, Windows uses its own threads
+	ifeq (,$(findstring msvc,$(platform))$(findstring android,$(platform))$(findstring ios,$(platform))$(findstring tvos,$(platform))$(filter osx win,$(platform)))
+		LIBS += -lpthread
+	endif
 endif
 
 # include the various .mak files
@@ -948,3 +976,18 @@ ifeq ($(SPLIT_UP_LINK), 1)
 	@rm $@.in
 endif
 	$(HIDE)rm -f $(OBJECTS) $(TARGET)
+# 1. Map object files to dependency trackers
+DEPFILES := $(OBJECTS:.o=.d)
+
+# 2. ONLY read or handle dependencies if we are NOT running a clean command
+ifneq ($(MAKECMDGOALS),clean)
+-include $(DEPFILES)
+
+# 3. FIXED: Generate a pure, clean dependency file directly using the -MM flag
+%.d: %.c
+	@echo "Generating dependency tracker for $<..."
+	$(HIDE)$(CC) -MM -MP -MT $(@:.d=.o) -MF $@ $< $(CFLAGS)
+
+# 4. Fallback stub to prevent build errors if a header file is deleted
+$(DEPFILES):
+endif

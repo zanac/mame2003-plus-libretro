@@ -808,6 +808,7 @@ DECLARE_PORT_HANDLERS_32BIT_LE(32)
 int			memory_init(void);
 void		memory_shutdown(void);
 void		memory_set_context(int activecpu);
+void		memory_register_banks(void);
 void		memory_set_unmap_value(data32_t value);
 
 /* ----- dynamic bank handlers ----- */
@@ -825,6 +826,7 @@ extern offs_t encrypted_opcode_start[],encrypted_opcode_end[];
 /* ----- return a base pointer to memory ---- */
 void *		memory_find_base(int cpunum, offs_t offset);
 void *		memory_get_read_ptr(int cpunum, offs_t offset);
+void *		memory_get_read_range(int cpunum, offs_t offset, offs_t *start, offs_t *len);
 void *		memory_get_write_ptr(int cpunum, offs_t offset);
 
 /* ----- dynamic memory mapping ----- */
