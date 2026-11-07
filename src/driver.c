@@ -6401,6 +6401,7 @@ Other Sun games
 	DRIVER( turfmast )	/* 0200 (c) 1996 Nazca */
 	DRIVER( mslug )		/* 0201 (c) 1996 Nazca */
 	DRIVER( puzzledp )	/* 0202 (c) 1995 Taito (Visco license) */
+	DRIVER( spf2ng )	/* homebrew: Super Puzzle Fighter II Turbo X" (Neo Geo) */
 	DRIVER( mosyougi )	/* 0203 (c) 1995 ADK / SNK */
 	/* 0204 QP (prototype) */
 	/* 0205 Neo-Geo CD Special (CD only) */
