@@ -172,6 +172,7 @@ CPUS+=TMS9995@
 CPUS+=Z8000@
 CPUS+=TMS32010@
 CPUS+=TMS32025@
+CPUS+=NAMCOC71@
 CPUS+=TMS32031@
 CPUS+=I960@
 CPUS+=MB86233@
@@ -1068,6 +1069,7 @@ SOURCES_C += \
 	$(CORE_DIR)/machine/sega315_5881.c $(CORE_DIR)/machine/sega315_5838.c \
 	$(CORE_DIR)/drivers/calorie.c \
     $(CORE_DIR)/drivers/hvyunit.c \
+    $(CORE_DIR)/drivers/akkaarrh.c \
 	$(CORE_DIR)/machine/mc8123.c \
 	$(CORE_DIR)/machine/namcoio_machine.c \
 	$(CORE_DIR)/drivers/tatsumi.c $(CORE_DIR)/vidhrdw/tatsumi.c $(CORE_DIR)/machine/tatsumi.c \
@@ -1863,6 +1865,15 @@ SOURCES_C += $(CORE_DIR)/cpu/tms32010/32010dsm.c
 endif
 else
 CPUDEFS += -DHAS_TMS32010=0
+endif
+
+CPU=$(strip $(findstring NAMCOC71@,$(CPUS)))
+ifneq ($(CPU),)
+OBJDIRS += $(CORE_DIR)/cpu/namcoc71
+CPUDEFS += -DHAS_NAMCOC71=1
+SOURCES_C += $(CORE_DIR)/cpu/namcoc71/c71.c
+else
+CPUDEFS += -DHAS_NAMCOC71=0
 endif
 
 CPU=$(strip $(findstring TMS32025@,$(CPUS)))
