@@ -11910,7 +11910,7 @@ ROM_END
 
 /* Vampire Savior 2 English bootleg - built by https://github.com/zanac/vsav2e from vsav2 (decrypted program),
    vsav (English texts) and vhunt2 (Jon Talbain, Rikuo and Sasquatch: its sprite ROMs are the upper half of the
-   sprite space, see MACHINE_DRIVER( vsav2e )). */
+   sprite space, see MACHINE_DRIVER( vsav2e )). The select screen is laid out like the PlayStation game's. */
 ROM_START( vsav2e )
 	ROM_REGION( 0x600000, REGION_CPU1, 0 )  /* 68000 code */
 	ROM_LOAD16_WORD_SWAP( "vs2e.03",   0x000000, 0x80000, NO_DUMP )
@@ -11932,11 +11932,12 @@ ROM_START( vsav2e )
 	ROM_LOAD64_WORD( "vs2.16m",   0x1000002, 0x400000, CRC(e0182c15) SHA1(a924d53ab39f4d85173bdb92a197dde2db0dc3f7) )
 	ROM_LOAD64_WORD( "vs2.18m",   0x1000004, 0x400000, CRC(778dc4f6) SHA1(8d0cd1c387b4b6ac7f92bb2e5a25983856328cdc) )
 	ROM_LOAD64_WORD( "vs2.20m",   0x1000006, 0x400000, CRC(605d9d1d) SHA1(99bc27557741527ca678d7b6307164bc04ebedc6) )
-	/* upper half: Vampire Hunter 2 (its .14m-.20m are the same chips as Vampire Savior 2's) */
-	ROM_LOAD64_WORD( "vh2.13m",   0x2000000, 0x400000, CRC(3b02ddaa) SHA1(a73b0554afbfc7ace41bdf8e6cafd4c1ef0b0a08) )
-	ROM_LOAD64_WORD( "vh2.15m",   0x2000002, 0x400000, CRC(4e40de66) SHA1(e8b80eadffad6070aa04c8ab426311c44e7c5507) )
-	ROM_LOAD64_WORD( "vh2.17m",   0x2000004, 0x400000, CRC(b31d00c9) SHA1(7e7be64690663f52d10c8946aabec4250c8a8740) )
-	ROM_LOAD64_WORD( "vh2.19m",   0x2000006, 0x400000, CRC(149be3ab) SHA1(afc8e96e6aa3cf1db6dfd8075030a6c50b4419a9) )
+	/* upper half: Vampire Hunter 2 (vh2.13m-.19m with the new tiles of the select screen in their empty space;
+	   its .14m-.20m are the same chips as Vampire Savior 2's) */
+	ROM_LOAD64_WORD( "vs2e.21m",  0x2000000, 0x400000, NO_DUMP )
+	ROM_LOAD64_WORD( "vs2e.23m",  0x2000002, 0x400000, NO_DUMP )
+	ROM_LOAD64_WORD( "vs2e.25m",  0x2000004, 0x400000, NO_DUMP )
+	ROM_LOAD64_WORD( "vs2e.27m",  0x2000006, 0x400000, NO_DUMP )
 	ROM_LOAD64_WORD( "vs2.14m",   0x3000000, 0x400000, CRC(cd09bd63) SHA1(e582b20a948ae54f52590496051688dbfae2bc9c) )
 	ROM_LOAD64_WORD( "vs2.16m",   0x3000002, 0x400000, CRC(e0182c15) SHA1(a924d53ab39f4d85173bdb92a197dde2db0dc3f7) )
 	ROM_LOAD64_WORD( "vs2.18m",   0x3000004, 0x400000, CRC(778dc4f6) SHA1(8d0cd1c387b4b6ac7f92bb2e5a25983856328cdc) )
