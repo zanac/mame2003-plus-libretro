@@ -1647,11 +1647,19 @@ static DRIVER_INIT( cps2turbo )
  *    here the graphics of Vampire Hunter 2 with the three characters
  *    Vampire Savior 2 left out
  *  and, with nothing to do here (qsound.c goes by the size of the region),
- *  16MB of QSound samples, the second half with those characters' voices
+ *  16MB of QSound samples, the second half with those characters' voices.
+ *  The per-character endings of Vampire Savior added two things:
+ *  - the program extension at 0x400000 is 2MB
+ *  - a scroll bank: 16MB of graphics after the sprites, for the scroll
+ *    layers (they can't reach the upper half of the sprites); bit 0-2 of
+ *    the word written to 0x8040c0 (unused on CPS2) make scroll 1-3 take
+ *    their tiles from it
  *
  *************************************/
 
 /* cps2turbo_writemem without the music samples of sfz3mix */
+WRITE16_HANDLER( vsav2e_scroll_bank_w );
+
 static MEMORY_WRITE16_START( vsav2e_writemem )
 	{ 0x000000, 0x5fffff, MWA16_ROM },				/* ROM */
 	{ 0x618000, 0x619fff, qsound_sharedram1_w },		/* Q RAM */
@@ -1666,6 +1674,7 @@ static MEMORY_WRITE16_START( vsav2e_writemem )
 	{ 0x800100, 0x8001ff, cps1_output_w },			/* Output ports mirror (sfa) */
 	{ 0x804040, 0x804041, cps2_eeprom_port_w },		/* EEPROM */
 	{ 0x8040a0, 0x8040a1, MWA16_NOP },				/* Unknown (reset once on startup) */
+	{ 0x8040c0, 0x8040c1, vsav2e_scroll_bank_w },		/* vsav2e: scroll layers from the scroll bank */
 	{ 0x8040e0, 0x8040e1, cps2_objram_bank_w },		/* bit 0 = Object ram bank swap */
 	{ 0x804100, 0x8041ff, cps1_output_w, &cps1_output, &cps1_output_size },  /* Output ports */
 	{ 0x900000, 0x92ffff, cps1_gfxram_w, &cps1_gfxram, &cps1_gfxram_size },
@@ -11923,9 +11932,9 @@ ROM_START( vsav2e )
 	ROM_LOAD16_WORD_SWAP( "vs2e.08",   0x280000, 0x80000, NO_DUMP )
 	ROM_LOAD16_WORD_SWAP( "vs2e.09",   0x300000, 0x80000, NO_DUMP )
 	ROM_LOAD16_WORD_SWAP( "vs2e.10",   0x380000, 0x80000, NO_DUMP )
-	ROM_LOAD16_WORD_SWAP( "vs2e.10x",  0x400000, 0x80000, NO_DUMP )
+	ROM_LOAD16_WORD_SWAP( "vs2e.10x",  0x400000, 0x200000, NO_DUMP )
 
-	ROM_REGION( 0x4000000, REGION_GFX1, 0 )
+	ROM_REGION( 0x5000000, REGION_GFX1, 0 )
 	ROM_LOAD64_WORD( "vs2.13m",   0x0000000, 0x400000, CRC(5c852f52) SHA1(528ce7fc9a0451e2e2d221dbf5e4a5796584e053) )
 	ROM_LOAD64_WORD( "vs2.15m",   0x0000002, 0x400000, CRC(a20f58af) SHA1(e873ad3e0fc8a06a5029113faf991f5c1b765316) )
 	ROM_LOAD64_WORD( "vs2.17m",   0x0000004, 0x400000, CRC(39db59ad) SHA1(da94f1529da82a6bf2129f51548412e1ab2b001a) )
@@ -11944,6 +11953,11 @@ ROM_START( vsav2e )
 	ROM_LOAD64_WORD( "vs2.16m",   0x3000002, 0x400000, CRC(e0182c15) SHA1(a924d53ab39f4d85173bdb92a197dde2db0dc3f7) )
 	ROM_LOAD64_WORD( "vs2.18m",   0x3000004, 0x400000, CRC(778dc4f6) SHA1(8d0cd1c387b4b6ac7f92bb2e5a25983856328cdc) )
 	ROM_LOAD64_WORD( "vs2.20m",   0x3000006, 0x400000, CRC(605d9d1d) SHA1(99bc27557741527ca678d7b6307164bc04ebedc6) )
+	/* the scroll bank: the tiles of the scroll layers of the endings (see vsav2e_scroll_bank_w) */
+	ROM_LOAD64_WORD( "vs2e.29m",  0x4000000, 0x400000, NO_DUMP )
+	ROM_LOAD64_WORD( "vs2e.31m",  0x4000002, 0x400000, NO_DUMP )
+	ROM_LOAD64_WORD( "vs2e.33m",  0x4000004, 0x400000, NO_DUMP )
+	ROM_LOAD64_WORD( "vs2e.35m",  0x4000006, 0x400000, NO_DUMP )
 
 	ROM_REGION( QSOUND_SIZE, REGION_CPU2, 0 )  /* 64k for the audio CPU (+banks) */
 	ROM_LOAD( "vs2e.01",  0x00000, 0x08000, NO_DUMP )
