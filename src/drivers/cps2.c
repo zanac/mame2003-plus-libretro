@@ -1637,7 +1637,7 @@ static DRIVER_INIT( cps2turbo )
 
 /*************************************
  *
- *  Vampire Savior 2 English bootleg (vsav2e)
+ *  Darkstalkers 3: Vampire Savior 2 English full roster bootleg (vsav2e)
  *
  *  A CPS2 with the two bigger ROM spaces of CPS2Turbo and nothing else of
  *  it (CPS2 clocks, display and sound):
@@ -11910,9 +11910,9 @@ ROM_START( vsav2d )
 	ROM_LOAD( "phoenix.key",  0x000000, 0x000014, CRC(2cf772b0) SHA1(eff33c65a4f3862c231f9e4d6fefa7b34398dbf2) )
 ROM_END
 
-/* Vampire Savior 2 English bootleg - built by https://github.com/zanac/vsav2e from vsav2 (decrypted program),
+/* Darkstalkers 3: Vampire Savior 2 English bootleg - built by https://github.com/zanac/vsav2e from vsav2 (decrypted program),
    vsav (English texts) and vhunt2 (Jon Talbain, Rikuo and Sasquatch: its sprite ROMs are the upper half of the
-   sprite space, see MACHINE_DRIVER( vsav2e )). The select screen is laid out like the PlayStation game's. */
+   sprite space, see MACHINE_DRIVER( vsav2e )). The select screen and the title are the PlayStation Darkstalkers 3 ones. */
 ROM_START( vsav2e )
 	ROM_REGION( 0x600000, REGION_CPU1, 0 )  /* 68000 code */
 	ROM_LOAD16_WORD_SWAP( "vs2e.03",   0x000000, 0x80000, NO_DUMP )
@@ -12716,7 +12716,7 @@ GAMEX( 1997, sgemfd,     sgemf,    cps2,     cps2_2p3b,  my_cps2,     ROT0,   "b
 GAMEX( 1997, vsavd,      vsav,     cps2,     cps2_2p6b,  my_cps2,     ROT0,   "bootleg", "Vampire Savior: The Lord of Vampire (Euro 970519 Phoenix Edition) (bootleg)", GAME_IMPERFECT_GRAPHICS)
 GAMEX( 1997, vhunt2d,    vhunt2,   cps2,     cps2_2p6b,  my_cps2,     ROT0,   "bootleg", "Vampire Hunter 2: Darkstalkers Revenge (Japan 970913 Phoenix Edition) (bootleg)", GAME_IMPERFECT_GRAPHICS)
 GAMEX( 1997, vsav2d,     vsav2,    cps2,     cps2_2p6b,  my_cps2,     ROT0,   "bootleg", "Vampire Savior 2: The Lord of Vampire (Japan 970913 Phoenix Edition) (bootleg)", GAME_IMPERFECT_GRAPHICS)
-GAME( 2026, vsav2e,     vsav2,    vsav2e,   cps2_2p6b,  my_cps2,     ROT0,   "bootleg", "Vampire Savior 2: The Lord of Vampire (English Bootleg)")
+GAME( 2026, vsav2e,     vsav2,    vsav2e,   cps2_2p6b,  my_cps2,     ROT0,   "bootleg", "Darkstalkers 3 (Vampire Savior 2 full roster English bootleg)")
 GAMEX( 1998, mvscud,     mvsc,     cps2,     cps2_2p6b,  my_cps2,     ROT0,   "bootleg", "Marvel Vs. Capcom: Clash of Super Heroes (USA 980123 Phoenix Edition) (bootleg)", GAME_IMPERFECT_GRAPHICS)
 GAMEX( 1998, sfa3ud,     sfa3,     cps2,     cps2_2p6b,  my_cps2,     ROT0,   "bootleg", "Street Fighter Alpha 3 (USA 980904 Phoenix Edition) (bootleg)", GAME_IMPERFECT_GRAPHICS)
 GAMEX( 1998, sfz3jr2d,   sfa3,     cps2,     cps2_2p6b,  my_cps2,     ROT0,   "bootleg", "Street Fighter Zero 3 (Japan 980629 Phoenix Edition) (bootleg)", GAME_IMPERFECT_GRAPHICS)
