@@ -1648,12 +1648,14 @@ static DRIVER_INIT( cps2turbo )
  *    Vampire Savior 2 left out
  *  and, with nothing to do here (qsound.c goes by the size of the region),
  *  16MB of QSound samples, the second half with those characters' voices.
- *  The per-character endings of Vampire Savior added two things:
+ *  The per-character endings of Vampire Savior added three things:
  *  - the program extension at 0x400000 is 2MB
  *  - a scroll bank: 16MB of graphics after the sprites, for the scroll
  *    layers (they can't reach the upper half of the sprites); bit 0-2 of
  *    the word written to 0x8040c0 (unused on CPS2) make scroll 1-3 take
  *    their tiles from it
+ *  - the sound program is 288KB, the whole audio CPU region: the music of
+ *    the endings is in Z80 banks 13-15 (the bank register has 4 bits)
  *
  *************************************/
 
@@ -11962,7 +11964,7 @@ ROM_START( vsav2e )
 	ROM_REGION( QSOUND_SIZE, REGION_CPU2, 0 )  /* 64k for the audio CPU (+banks) */
 	ROM_LOAD( "vs2e.01",  0x00000, 0x08000, NO_DUMP )
 	ROM_CONTINUE(         0x10000, 0x18000 )
-	ROM_LOAD( "vs2e.02",  0x28000, 0x20000, NO_DUMP )
+	ROM_LOAD( "vs2e.02",  0x28000, 0x28000, NO_DUMP )  /* banks 12-15: copied sequences and the ending music */
 
 	ROM_REGION( 0x1000000, REGION_SOUND1, 0 )  /* QSound samples: Vampire Savior 2's, then Vampire Hunter 2's */
 	ROM_LOAD16_WORD_SWAP( "vs2.11m",   0x000000, 0x400000, CRC(d67e47b7) SHA1(15a3f6779eccb10551ed94edf7e6e406a79b3de7) )
