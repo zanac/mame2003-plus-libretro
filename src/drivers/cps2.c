@@ -1646,6 +1646,8 @@ static DRIVER_INIT( cps2turbo )
  *  - 64MB of sprite ROM: bit 12 of the sprite Y selects the upper half,
  *    here the graphics of Vampire Hunter 2 with the three characters
  *    Vampire Savior 2 left out
+ *  and, with nothing to do here (qsound.c goes by the size of the region),
+ *  16MB of QSound samples, the second half with those characters' voices
  *
  *************************************/
 
@@ -11944,13 +11946,15 @@ ROM_START( vsav2e )
 	ROM_LOAD64_WORD( "vs2.20m",   0x3000006, 0x400000, CRC(605d9d1d) SHA1(99bc27557741527ca678d7b6307164bc04ebedc6) )
 
 	ROM_REGION( QSOUND_SIZE, REGION_CPU2, 0 )  /* 64k for the audio CPU (+banks) */
-	ROM_LOAD( "vs2.01",   0x00000, 0x08000, CRC(35190139) SHA1(07f8e53ea398461de5dcda9814dde7c09faf9f65) )
+	ROM_LOAD( "vs2e.01",  0x00000, 0x08000, NO_DUMP )
 	ROM_CONTINUE(         0x10000, 0x18000 )
-	ROM_LOAD( "vs2.02",   0x28000, 0x20000, CRC(c32dba09) SHA1(1fe337ff334fab79847f9677ba0e168e93daa1c8) )
+	ROM_LOAD( "vs2e.02",  0x28000, 0x20000, NO_DUMP )
 
-	ROM_REGION( 0x800000, REGION_SOUND1, 0 )  /* QSound samples */
+	ROM_REGION( 0x1000000, REGION_SOUND1, 0 )  /* QSound samples: Vampire Savior 2's, then Vampire Hunter 2's */
 	ROM_LOAD16_WORD_SWAP( "vs2.11m",   0x000000, 0x400000, CRC(d67e47b7) SHA1(15a3f6779eccb10551ed94edf7e6e406a79b3de7) )
 	ROM_LOAD16_WORD_SWAP( "vs2.12m",   0x400000, 0x400000, CRC(6d020a14) SHA1(e98f862fac1e357c90949768bb2646263d9981a0) )
+	ROM_LOAD16_WORD_SWAP( "vh2.11m",   0x800000, 0x400000, CRC(38922efd) SHA1(8cfb36bdce3a524d0a81fec12ca0cba82222fa30) )
+	ROM_LOAD16_WORD_SWAP( "vh2.12m",   0xc00000, 0x400000, CRC(6e2430af) SHA1(b475faf943bec4171ba0130f287e1948743ca273) )
 
 	ROM_REGION( 0x20, REGION_USER5, 0 )
 	ROM_LOAD( "phoenix.key",  0x000000, 0x000014, CRC(2cf772b0) SHA1(eff33c65a4f3862c231f9e4d6fefa7b34398dbf2) )
