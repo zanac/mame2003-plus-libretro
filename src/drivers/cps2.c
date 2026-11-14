@@ -1219,7 +1219,7 @@ static struct m68k_encryption_interface cps2_encryption =
 static MACHINE_DRIVER_START( cps2 )
 
 	/* basic machine hardware */
-	MDRV_CPU_ADD(M68000, 11800000)
+	MDRV_CPU_ADD_TAG("main", M68000, 11800000)
 	MDRV_CPU_CONFIG(cps2_encryption)
 	MDRV_CPU_MEMORY(cps2_readmem,cps2_writemem)
 	MDRV_CPU_VBLANK_INT(cps2_interrupt,262)	/* 262  ??? interrupts per frame*/
@@ -1634,6 +1634,53 @@ static DRIVER_INIT( cps2turbo )
 	state_save_register_int("cps2turbo", 0, "tune", &cps2turbo_tune);
 	state_save_register_func_postload(cps2turbo_music_postload);
 }
+
+/*************************************
+ *
+ *  Vampire Savior 2 English bootleg (vsav2e)
+ *
+ *  A CPS2 with the two bigger ROM spaces of CPS2Turbo and nothing else of
+ *  it (CPS2 clocks, display and sound):
+ *  - 6MB of program ROM space: the game only uses the object output
+ *    through its mirror at 0xfffff0, so 0x400000 is free for ROM
+ *  - 64MB of sprite ROM: bit 12 of the sprite Y selects the upper half,
+ *    here the graphics of Vampire Hunter 2 with the three characters
+ *    Vampire Savior 2 left out
+ *
+ *************************************/
+
+/* cps2turbo_writemem without the music samples of sfz3mix */
+static MEMORY_WRITE16_START( vsav2e_writemem )
+	{ 0x000000, 0x5fffff, MWA16_ROM },				/* ROM */
+	{ 0x618000, 0x619fff, qsound_sharedram1_w },		/* Q RAM */
+	{ 0x660000, 0x663fff, MWA16_RAM },				/* Extra RAM */
+	{ 0x664000, 0x664001, MWA16_RAM },				/* Unknown */
+	{ 0x665000, 0x66500b, MWA16_RAM, &cps2_output, &cps2_output_size },	/* CPS2 object output */
+	{ 0x700000, 0x701fff, cps2_objram1_w, &cps2_objram1 },	/* Object RAM, no game seems to use it directly */
+	{ 0x708000, 0x709fff, cps2_objram2_w, &cps2_objram2 },	/* Object RAM */
+	{ 0x70a000, 0x70bfff, cps2_objram2_w },			/* mirror */
+	{ 0x70c000, 0x70dfff, cps2_objram2_w },			/* mirror */
+	{ 0x70e000, 0x70ffff, cps2_objram2_w },			/* mirror */
+	{ 0x800100, 0x8001ff, cps1_output_w },			/* Output ports mirror (sfa) */
+	{ 0x804040, 0x804041, cps2_eeprom_port_w },		/* EEPROM */
+	{ 0x8040a0, 0x8040a1, MWA16_NOP },				/* Unknown (reset once on startup) */
+	{ 0x8040e0, 0x8040e1, cps2_objram_bank_w },		/* bit 0 = Object ram bank swap */
+	{ 0x804100, 0x8041ff, cps1_output_w, &cps1_output, &cps1_output_size },  /* Output ports */
+	{ 0x900000, 0x92ffff, cps1_gfxram_w, &cps1_gfxram, &cps1_gfxram_size },
+	{ 0xfffff0, 0xfffffb, cps2turbo_output_mirror_w },	/* CPS2 object output */
+	{ 0xff0000, 0xffffff, MWA16_RAM },				/* RAM */
+MEMORY_END
+
+static MACHINE_DRIVER_START( vsav2e )
+
+	/* basic machine hardware */
+	MDRV_IMPORT_FROM(cps2)
+	MDRV_CPU_MODIFY("main")
+	MDRV_CPU_MEMORY(cps2turbo_readmem,vsav2e_writemem)
+
+	/* video hardware */
+	MDRV_VIDEO_START(cps2turbo)
+MACHINE_DRIVER_END
 
 /*************************************
  *
@@ -11861,6 +11908,53 @@ ROM_START( vsav2d )
 	ROM_LOAD( "phoenix.key",  0x000000, 0x000014, CRC(2cf772b0) SHA1(eff33c65a4f3862c231f9e4d6fefa7b34398dbf2) )
 ROM_END
 
+/* Vampire Savior 2 English bootleg - built by https://github.com/zanac/vsav2e from vsav2 (decrypted program),
+   vsav (English texts) and vhunt2 (Jon Talbain, Rikuo and Sasquatch: its sprite ROMs are the upper half of the
+   sprite space, see MACHINE_DRIVER( vsav2e )). */
+ROM_START( vsav2e )
+	ROM_REGION( 0x600000, REGION_CPU1, 0 )  /* 68000 code */
+	ROM_LOAD16_WORD_SWAP( "vs2e.03",   0x000000, 0x80000, NO_DUMP )
+	ROM_LOAD16_WORD_SWAP( "vs2e.04",   0x080000, 0x80000, NO_DUMP )
+	ROM_LOAD16_WORD_SWAP( "vs2e.05",   0x100000, 0x80000, NO_DUMP )
+	ROM_LOAD16_WORD_SWAP( "vs2e.06",   0x180000, 0x80000, NO_DUMP )
+	ROM_LOAD16_WORD_SWAP( "vs2e.07",   0x200000, 0x80000, NO_DUMP )
+	ROM_LOAD16_WORD_SWAP( "vs2e.08",   0x280000, 0x80000, NO_DUMP )
+	ROM_LOAD16_WORD_SWAP( "vs2e.09",   0x300000, 0x80000, NO_DUMP )
+	ROM_LOAD16_WORD_SWAP( "vs2e.10",   0x380000, 0x80000, NO_DUMP )
+	ROM_LOAD16_WORD_SWAP( "vs2e.10x",  0x400000, 0x80000, NO_DUMP )
+
+	ROM_REGION( 0x4000000, REGION_GFX1, 0 )
+	ROM_LOAD64_WORD( "vs2.13m",   0x0000000, 0x400000, CRC(5c852f52) SHA1(528ce7fc9a0451e2e2d221dbf5e4a5796584e053) )
+	ROM_LOAD64_WORD( "vs2.15m",   0x0000002, 0x400000, CRC(a20f58af) SHA1(e873ad3e0fc8a06a5029113faf991f5c1b765316) )
+	ROM_LOAD64_WORD( "vs2.17m",   0x0000004, 0x400000, CRC(39db59ad) SHA1(da94f1529da82a6bf2129f51548412e1ab2b001a) )
+	ROM_LOAD64_WORD( "vs2.19m",   0x0000006, 0x400000, CRC(00c763a7) SHA1(0ff528e12e255ebf699101ac71f05b1f6bef7165) )
+	ROM_LOAD64_WORD( "vs2.14m",   0x1000000, 0x400000, CRC(cd09bd63) SHA1(e582b20a948ae54f52590496051688dbfae2bc9c) )
+	ROM_LOAD64_WORD( "vs2.16m",   0x1000002, 0x400000, CRC(e0182c15) SHA1(a924d53ab39f4d85173bdb92a197dde2db0dc3f7) )
+	ROM_LOAD64_WORD( "vs2.18m",   0x1000004, 0x400000, CRC(778dc4f6) SHA1(8d0cd1c387b4b6ac7f92bb2e5a25983856328cdc) )
+	ROM_LOAD64_WORD( "vs2.20m",   0x1000006, 0x400000, CRC(605d9d1d) SHA1(99bc27557741527ca678d7b6307164bc04ebedc6) )
+	/* upper half: Vampire Hunter 2 (its .14m-.20m are the same chips as Vampire Savior 2's) */
+	ROM_LOAD64_WORD( "vh2.13m",   0x2000000, 0x400000, CRC(3b02ddaa) SHA1(a73b0554afbfc7ace41bdf8e6cafd4c1ef0b0a08) )
+	ROM_LOAD64_WORD( "vh2.15m",   0x2000002, 0x400000, CRC(4e40de66) SHA1(e8b80eadffad6070aa04c8ab426311c44e7c5507) )
+	ROM_LOAD64_WORD( "vh2.17m",   0x2000004, 0x400000, CRC(b31d00c9) SHA1(7e7be64690663f52d10c8946aabec4250c8a8740) )
+	ROM_LOAD64_WORD( "vh2.19m",   0x2000006, 0x400000, CRC(149be3ab) SHA1(afc8e96e6aa3cf1db6dfd8075030a6c50b4419a9) )
+	ROM_LOAD64_WORD( "vs2.14m",   0x3000000, 0x400000, CRC(cd09bd63) SHA1(e582b20a948ae54f52590496051688dbfae2bc9c) )
+	ROM_LOAD64_WORD( "vs2.16m",   0x3000002, 0x400000, CRC(e0182c15) SHA1(a924d53ab39f4d85173bdb92a197dde2db0dc3f7) )
+	ROM_LOAD64_WORD( "vs2.18m",   0x3000004, 0x400000, CRC(778dc4f6) SHA1(8d0cd1c387b4b6ac7f92bb2e5a25983856328cdc) )
+	ROM_LOAD64_WORD( "vs2.20m",   0x3000006, 0x400000, CRC(605d9d1d) SHA1(99bc27557741527ca678d7b6307164bc04ebedc6) )
+
+	ROM_REGION( QSOUND_SIZE, REGION_CPU2, 0 )  /* 64k for the audio CPU (+banks) */
+	ROM_LOAD( "vs2.01",   0x00000, 0x08000, CRC(35190139) SHA1(07f8e53ea398461de5dcda9814dde7c09faf9f65) )
+	ROM_CONTINUE(         0x10000, 0x18000 )
+	ROM_LOAD( "vs2.02",   0x28000, 0x20000, CRC(c32dba09) SHA1(1fe337ff334fab79847f9677ba0e168e93daa1c8) )
+
+	ROM_REGION( 0x800000, REGION_SOUND1, 0 )  /* QSound samples */
+	ROM_LOAD16_WORD_SWAP( "vs2.11m",   0x000000, 0x400000, CRC(d67e47b7) SHA1(15a3f6779eccb10551ed94edf7e6e406a79b3de7) )
+	ROM_LOAD16_WORD_SWAP( "vs2.12m",   0x400000, 0x400000, CRC(6d020a14) SHA1(e98f862fac1e357c90949768bb2646263d9981a0) )
+
+	ROM_REGION( 0x20, REGION_USER5, 0 )
+	ROM_LOAD( "phoenix.key",  0x000000, 0x000014, CRC(2cf772b0) SHA1(eff33c65a4f3862c231f9e4d6fefa7b34398dbf2) )
+ROM_END
+
 ROM_START( csclub1d )
 	ROM_REGION( CODE_SIZE, REGION_CPU1, 0 )  /* 68000 code */
 	ROM_LOAD16_WORD_SWAP( "csce_d.03", 0x000000, 0x80000, CRC(5aedc6e6) SHA1(1330959ac96b0c267e81237974ec44ed7189495a) )
@@ -12617,6 +12711,7 @@ GAMEX( 1997, sgemfd,     sgemf,    cps2,     cps2_2p3b,  my_cps2,     ROT0,   "b
 GAMEX( 1997, vsavd,      vsav,     cps2,     cps2_2p6b,  my_cps2,     ROT0,   "bootleg", "Vampire Savior: The Lord of Vampire (Euro 970519 Phoenix Edition) (bootleg)", GAME_IMPERFECT_GRAPHICS)
 GAMEX( 1997, vhunt2d,    vhunt2,   cps2,     cps2_2p6b,  my_cps2,     ROT0,   "bootleg", "Vampire Hunter 2: Darkstalkers Revenge (Japan 970913 Phoenix Edition) (bootleg)", GAME_IMPERFECT_GRAPHICS)
 GAMEX( 1997, vsav2d,     vsav2,    cps2,     cps2_2p6b,  my_cps2,     ROT0,   "bootleg", "Vampire Savior 2: The Lord of Vampire (Japan 970913 Phoenix Edition) (bootleg)", GAME_IMPERFECT_GRAPHICS)
+GAME( 2026, vsav2e,     vsav2,    vsav2e,   cps2_2p6b,  my_cps2,     ROT0,   "bootleg", "Vampire Savior 2: The Lord of Vampire (English Bootleg)")
 GAMEX( 1998, mvscud,     mvsc,     cps2,     cps2_2p6b,  my_cps2,     ROT0,   "bootleg", "Marvel Vs. Capcom: Clash of Super Heroes (USA 980123 Phoenix Edition) (bootleg)", GAME_IMPERFECT_GRAPHICS)
 GAMEX( 1998, sfa3ud,     sfa3,     cps2,     cps2_2p6b,  my_cps2,     ROT0,   "bootleg", "Street Fighter Alpha 3 (USA 980904 Phoenix Edition) (bootleg)", GAME_IMPERFECT_GRAPHICS)
 GAMEX( 1998, sfz3jr2d,   sfa3,     cps2,     cps2_2p6b,  my_cps2,     ROT0,   "bootleg", "Street Fighter Zero 3 (Japan 980629 Phoenix Edition) (bootleg)", GAME_IMPERFECT_GRAPHICS)
