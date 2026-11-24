@@ -464,6 +464,7 @@ SOURCES_C += \
 	$(CORE_DIR)/vidhrdw/gunbustr_vidhrdw.c $(CORE_DIR)/drivers/gunbustr.c \
 	$(CORE_DIR)/vidhrdw/superchs_vidhrdw.c $(CORE_DIR)/drivers/superchs.c \
 	$(CORE_DIR)/vidhrdw/undrfire_vidhrdw.c $(CORE_DIR)/drivers/undrfire.c \
+	$(CORE_DIR)/vidhrdw/galastrm_vidhrdw.c $(CORE_DIR)/drivers/galastrm.c \
 	$(CORE_DIR)/vidhrdw/groundfx_vidhrdw.c $(CORE_DIR)/drivers/groundfx.c \
 	$(CORE_DIR)/vidhrdw/taito_f2_vidhrdw.c $(CORE_DIR)/drivers/taito_f2.c \
 	$(CORE_DIR)/vidhrdw/taito_f3_vidhrdw.c $(CORE_DIR)/sndhrdw/taito_f3_sndhrdw.c $(CORE_DIR)/drivers/taito_f3.c \

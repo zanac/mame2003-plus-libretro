@@ -1682,6 +1682,7 @@ const struct GameDriver *test_drivers[] =
 	DRIVER( ainferno )	/* C45 (c) 1990 Taito America Corporation (US) */
 
 	/* enhanced Z-System hardware games */
+	DRIVER( galastrm )	/* C99 (c) 1992 Taito Corporation (Japan) */
 	DRIVER( gunbustr )	/* D27 (c) 1992 Taito Corporation (Japan) */
 	DRIVER( superchs )	/* D46 (c) 1992 Taito America Corporation (US) */
 	DRIVER( groundfx )	/* D51 (c) 1992 Taito Coporation */
