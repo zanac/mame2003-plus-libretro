@@ -1381,7 +1381,8 @@ static int display_rom_load_results(struct rom_load_data *romdata)
   }
   else if (romdata->warnings)
   {
-    frontend_message_cb(rom_warnings, 180);
+    /* spf2t branch: no on-screen notice for ROM warnings (wrong checksums or lengths),
+       so updated sets start silently on fixed-list front ends; the log keeps them */
     strcat(romdata->errorbuf, rom_warnings);
     log_cb(RETRO_LOG_WARN, LOGPRE "%s", romdata->errorbuf);
   }
