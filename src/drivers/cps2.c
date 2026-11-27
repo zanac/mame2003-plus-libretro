@@ -8247,24 +8247,29 @@ ROM_END
 
 ROM_START( spf2t )
 	ROM_REGION(CODE_SIZE, REGION_CPU1, 0 )  /* 68000 code */
-	ROM_LOAD16_WORD_SWAP( "pzfe.03", 0x000000, 0x80000, CRC(2af51954) SHA1(51f8797918391e772cf3cc27074ed6ca419806bd) )
-	ROM_LOAD16_WORD_SWAP( "pzf.04",  0x080000, 0x80000, CRC(b80649e2) SHA1(5bfccd656aea7ff82e9a20bb5856f4ab99b5a007) )  /* marked pzfe.04 but same as pzf.04 */
+	ROM_LOAD16_WORD_SWAP( "pzfen.03", 0x000000, 0x80000, CRC(00000000) )
+	ROM_LOAD16_WORD_SWAP( "pzfen.04", 0x080000, 0x80000, CRC(00000000) )
 
-	ROM_REGION( 0xC00000, REGION_GFX1, 0 )
+	ROM_REGION( 0x1000000, REGION_GFX1, 0 )
 	ROM_FILL(             0x000000, 0x800000, 0x00 )
-	ROM_LOAD64_WORD( "pzf.14m", 0x800000, 0x100000, CRC(2d4881cb) SHA1(fd3baa183c25bed153b19c251980e2fb761600e2) )
-	ROM_LOAD64_WORD( "pzf.16m", 0x800002, 0x100000, CRC(4b0fd1be) SHA1(377aafdcdb7a866b1c8487670e3598d8197976e4) )
-	ROM_LOAD64_WORD( "pzf.18m", 0x800004, 0x100000, CRC(e43aac33) SHA1(d041e0688c3807d3363861a7f216de43b34d846c) )
-	ROM_LOAD64_WORD( "pzf.20m", 0x800006, 0x100000, CRC(7f536ff1) SHA1(905b9d62ef7bef47297c7f4a4dd697aed6df38a5) )
+	ROM_LOAD64_WORD( "pzfen.14m", 0x800000, 0x100000, CRC(00000000) )
+	ROM_LOAD64_WORD( "pzfen.16m", 0x800002, 0x100000, CRC(00000000) )
+	ROM_LOAD64_WORD( "pzfen.18m", 0x800004, 0x100000, CRC(00000000) )
+	ROM_LOAD64_WORD( "pzfen.20m", 0x800006, 0x100000, CRC(00000000) )
+	ROM_LOAD64_WORD( "pzfen.13m", 0xC00000, 0x100000, CRC(00000000) )	/* the guests: Zangief, Ibuki */
+	ROM_LOAD64_WORD( "pzfen.15m", 0xC00002, 0x100000, CRC(00000000) )
+	ROM_LOAD64_WORD( "pzfen.17m", 0xC00004, 0x100000, CRC(00000000) )
+	ROM_LOAD64_WORD( "pzfen.19m", 0xC00006, 0x100000, CRC(00000000) )
 
 	ROM_REGION(QSOUND_SIZE, REGION_CPU2, 0 )  /* 64k for the audio CPU (+banks) */
-	ROM_LOAD( "pzf.01",   0x00000, 0x08000, CRC(600fb2a3) SHA1(1fab1c2a23bf6ad8309d29ddbbc29435a8aeea13) )
+	ROM_LOAD( "pzfen.01",   0x00000, 0x08000, CRC(00000000) )
 	ROM_CONTINUE(         0x10000, 0x18000 )
-	ROM_LOAD( "pzf.02",   0x28000, 0x20000, CRC(496076e0) SHA1(1ee4e135140afd0e8e03231e570cd77d140f6367) )
+	ROM_LOAD( "pzfen.02",   0x28000, 0x20000, CRC(00000000) )
 
-	ROM_REGION( 0x400000, REGION_SOUND1, 0 )  /* QSound samples */
+	ROM_REGION( 0x800000, REGION_SOUND1, 0 )  /* QSound samples */
 	ROM_LOAD16_WORD_SWAP( "pzf.11m",   0x000000, 0x200000, CRC(78442743) SHA1(b61190bb586871de6d54af580e3e1d9cc0de0acb) )
 	ROM_LOAD16_WORD_SWAP( "pzf.12m",   0x200000, 0x200000, CRC(399d2c7b) SHA1(e849dea97b8d16540415c0d9bbc4f9f4eb755ec4) )
+	ROM_LOAD16_WORD_SWAP( "pzfen.13s", 0x400000, 0x400000, CRC(00000000) )	/* the guests: Pocket Fighter's samples */
 
 	ROM_REGION( 0x20, REGION_USER5, 0 )
 	ROM_LOAD( "spf2t.key",    0x000000, 0x000014, CRC(4c4dc7e3) SHA1(db4f257f6006b2f3cfa7cc70917228d639324513) )
@@ -8431,29 +8436,24 @@ ROM_END
    non-blocking checksum notice; the original pzf.11m/pzf.12m samples and the key keep their CRCs */
 ROM_START( spf2enh )
 	ROM_REGION(CODE_SIZE, REGION_CPU1, 0 )  /* 68000 code */
-	ROM_LOAD16_WORD_SWAP( "pzfen.03", 0x000000, 0x80000, CRC(00000000) )
-	ROM_LOAD16_WORD_SWAP( "pzfen.04", 0x080000, 0x80000, CRC(00000000) )
+	ROM_LOAD16_WORD_SWAP( "pzfe.03", 0x000000, 0x80000, CRC(2af51954) SHA1(51f8797918391e772cf3cc27074ed6ca419806bd) )
+	ROM_LOAD16_WORD_SWAP( "pzf.04",  0x080000, 0x80000, CRC(b80649e2) SHA1(5bfccd656aea7ff82e9a20bb5856f4ab99b5a007) )  /* marked pzfe.04 but same as pzf.04 */
 
-	ROM_REGION( 0x1000000, REGION_GFX1, 0 )
+	ROM_REGION( 0xC00000, REGION_GFX1, 0 )
 	ROM_FILL(             0x000000, 0x800000, 0x00 )
-	ROM_LOAD64_WORD( "pzfen.14m", 0x800000, 0x100000, CRC(00000000) )
-	ROM_LOAD64_WORD( "pzfen.16m", 0x800002, 0x100000, CRC(00000000) )
-	ROM_LOAD64_WORD( "pzfen.18m", 0x800004, 0x100000, CRC(00000000) )
-	ROM_LOAD64_WORD( "pzfen.20m", 0x800006, 0x100000, CRC(00000000) )
-	ROM_LOAD64_WORD( "pzfen.13m", 0xC00000, 0x100000, CRC(00000000) )	/* the guests: Zangief, Ibuki */
-	ROM_LOAD64_WORD( "pzfen.15m", 0xC00002, 0x100000, CRC(00000000) )
-	ROM_LOAD64_WORD( "pzfen.17m", 0xC00004, 0x100000, CRC(00000000) )
-	ROM_LOAD64_WORD( "pzfen.19m", 0xC00006, 0x100000, CRC(00000000) )
+	ROM_LOAD64_WORD( "pzf.14m", 0x800000, 0x100000, CRC(2d4881cb) SHA1(fd3baa183c25bed153b19c251980e2fb761600e2) )
+	ROM_LOAD64_WORD( "pzf.16m", 0x800002, 0x100000, CRC(4b0fd1be) SHA1(377aafdcdb7a866b1c8487670e3598d8197976e4) )
+	ROM_LOAD64_WORD( "pzf.18m", 0x800004, 0x100000, CRC(e43aac33) SHA1(d041e0688c3807d3363861a7f216de43b34d846c) )
+	ROM_LOAD64_WORD( "pzf.20m", 0x800006, 0x100000, CRC(7f536ff1) SHA1(905b9d62ef7bef47297c7f4a4dd697aed6df38a5) )
 
 	ROM_REGION(QSOUND_SIZE, REGION_CPU2, 0 )  /* 64k for the audio CPU (+banks) */
-	ROM_LOAD( "pzfen.01",   0x00000, 0x08000, CRC(00000000) )
+	ROM_LOAD( "pzf.01",   0x00000, 0x08000, CRC(600fb2a3) SHA1(1fab1c2a23bf6ad8309d29ddbbc29435a8aeea13) )
 	ROM_CONTINUE(         0x10000, 0x18000 )
-	ROM_LOAD( "pzfen.02",   0x28000, 0x20000, CRC(00000000) )
+	ROM_LOAD( "pzf.02",   0x28000, 0x20000, CRC(496076e0) SHA1(1ee4e135140afd0e8e03231e570cd77d140f6367) )
 
-	ROM_REGION( 0x800000, REGION_SOUND1, 0 )  /* QSound samples */
+	ROM_REGION( 0x400000, REGION_SOUND1, 0 )  /* QSound samples */
 	ROM_LOAD16_WORD_SWAP( "pzf.11m",   0x000000, 0x200000, CRC(78442743) SHA1(b61190bb586871de6d54af580e3e1d9cc0de0acb) )
 	ROM_LOAD16_WORD_SWAP( "pzf.12m",   0x200000, 0x200000, CRC(399d2c7b) SHA1(e849dea97b8d16540415c0d9bbc4f9f4eb755ec4) )
-	ROM_LOAD16_WORD_SWAP( "pzfen.13s", 0x400000, 0x400000, CRC(00000000) )	/* the guests: Pocket Fighter's samples */
 
 	ROM_REGION( 0x20, REGION_USER5, 0 )
 	ROM_LOAD( "spf2t.key",    0x000000, 0x000014, CRC(4c4dc7e3) SHA1(db4f257f6006b2f3cfa7cc70917228d639324513) )
@@ -12567,13 +12567,15 @@ GAME( 1996, sfz2alr1,   sfz2al,   cps2,     cps2_2p6b,  my_cps2,     ROT0,   "Ca
 GAME( 1996, sfz2alj,    sfz2al,   cps2,     cps2_2p6b,  my_cps2,     ROT0,   "Capcom", "Street Fighter Zero 2 Alpha (Japan 960805)")
 GAME( 1996, sfz2alh,    sfz2al,   cps2,     cps2_2p6b,  my_cps2,     ROT0,   "Capcom", "Street Fighter Zero 2 Alpha (Hispanic 960813)")
 GAME( 1996, sfz2alb,    sfz2al,   cps2,     cps2_2p6b,  my_cps2,     ROT0,   "Capcom", "Street Fighter Zero 2 Alpha (Brazil 960813)")
-GAME( 1996, spf2t,      0,        cps2,     cps2_2p2b,  my_cps2,     ROT0,   "Capcom", "Super Puzzle Fighter II Turbo (Euro 960529)")
+/* spf2t branch: the spf2t name loads the Super Puzzle Fighter 2 Turbo X" set (for front ends with a fixed
+   game list, e.g. Pandora boards), and spf2enh holds the original Euro 960529 set */
+GAME( 2026, spf2t,      0,        cps2,     spf2enh,    my_cps2,     ROT0,   "hack",   "Super Puzzle Fighter 2 Turbo X\"")
 GAME( 1996, spf2tu,     spf2t,    cps2,     cps2_2p2b,  my_cps2,     ROT0,   "Capcom", "Super Puzzle Fighter II Turbo (USA 960620)")
 GAME( 1996, spf2xj,     spf2t,    cps2,     cps2_2p2b,  my_cps2,     ROT0,   "Capcom", "Super Puzzle Fighter II X (Japan 960531)")
 GAME( 1996, spf2ta,     spf2t,    cps2,     cps2_2p2b,  my_cps2,     ROT0,   "Capcom", "Super Puzzle Fighter II Turbo (Asia 960529)")
 GAME( 1996, spf2th,     spf2t,    cps2,     cps2_2p2b,  my_cps2,     ROT0,   "Capcom", "Super Puzzle Fighter II Turbo (Hispanic 960531)")
 GAME( 2021, spf2xpri,   spf2t,    cps2,     cps2_2p2b,  my_cps2,     ROT0,   "hack",   "Super Puzzle Fighter 2 X'")
-GAME( 2026, spf2enh,    spf2t,    cps2,     spf2enh,    my_cps2,     ROT0,   "hack",   "Super Puzzle Fighter 2 Turbo X\"")
+GAME( 1996, spf2enh,    spf2t,    cps2,     cps2_2p2b,  my_cps2,     ROT0,   "Capcom", "Super Puzzle Fighter II Turbo (Euro 960529)")
 GAME( 2026, fixfelc2,   0,        cps2,     cps2_2p2b,  my_cps2,     ROT270, "hack",    "Fix-It Felix Jr. (CPS2)")
 GAME( 1996, megaman2,   0,        cps2,     cps2_2p3b,  my_cps2,     ROT0,   "Capcom", "Mega Man 2: The Power Fighters (USA 960708)")
 GAME( 1996, megaman2a,  megaman2, cps2,     cps2_2p3b,  my_cps2,     ROT0,   "Capcom", "Mega Man 2: The Power Fighters (Asia 960708)")

@@ -2561,13 +2561,13 @@ V-V                           TP-027
 	DRIVER( sfz2alj )    /* Capcom, Street Fighter Zero 2 Alpha (Japan 960805) */
 	DRIVER( sfz2alh )    /* Capcom, Street Fighter Zero 2 Alpha (Hispanic 960813) */
 	DRIVER( sfz2alb )    /* Capcom, Street Fighter Zero 2 Alpha (Brazil 960813) */
-	DRIVER( spf2t )      /* Capcom, Super Puzzle Fighter II Turbo (Euro 960529) */
+	DRIVER( spf2t )      /* hack, Super Puzzle Fighter 2 Turbo X" (X' plus Zangief and Ibuki) */
 	DRIVER( spf2tu )     /* Capcom, Super Puzzle Fighter II Turbo (USA 960620) */
 	DRIVER( spf2xj )     /* Capcom, Super Puzzle Fighter II X (Japan 960531) */
 	DRIVER( spf2ta )     /* Capcom, Super Puzzle Fighter II Turbo (Asia 960529) */
 	DRIVER( spf2th )     /* Capcom, Super Puzzle Fighter II Turbo (Hispanic 960531) */
 	DRIVER( spf2xpri )   /* hack, Super Puzzle Fighter 2 X' (X Prime rebalance of Euro 960529) */
-	DRIVER( spf2enh )    /* hack, Super Puzzle Fighter 2 Turbo X" (X' plus Zangief and Ibuki) */
+	DRIVER( spf2enh )    /* Capcom, Super Puzzle Fighter II Turbo (Euro 960529) */
 	DRIVER( fixfelc2 )   /* homebrew, Fix-It Felix Jr. (CPS2) */
 	DRIVER( megaman2 )   /* Capcom, Mega Man 2: The Power Fighters (USA 960708) */
 	DRIVER( megaman2a )  /* Capcom, Mega Man 2: The Power Fighters (Asia 960708) */
