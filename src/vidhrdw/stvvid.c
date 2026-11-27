@@ -127,7 +127,9 @@ static void log_masked(int mask, const char *fmt, ...) { (void)mask; (void)fmt; 
 	work in a DLL loaded at run time. The state is thread local even with
 	the option off, so an emulated TLS would slow every game down.
 */
-#if defined(HAVE_THREADS) && !defined(VITA) && !defined(PSP) && !defined(_3DS) && !defined(GEKKO) && \
+#include "band_pool.h"
+
+#if defined(BAND_POOL_THREADS) && !defined(VITA) && !defined(PSP) && !defined(_3DS) && !defined(GEKKO) && \
 	!(defined(__MINGW32__) && !defined(__clang__)) && !(defined(_MSC_VER) && _MSC_VER < 1900)
 #define STV_VIDEO_THREADS 1
 #if defined(__has_feature)
@@ -238,10 +240,10 @@ static void gfx_mark_dirty_addr(UINT32 addr)
 	}
 }
 
-static void gfx_decode_element(struct stv_gfx *g, int code)
+static void gfx_decode_into(const struct stv_gfx *g, int code, UINT8 *out, UINT16 *rows_any, UINT16 *rows_full)
 {
 	const UINT8 *src = vdp2_gfx_source + code * g->inc;
-	UINT8 *dst = g->cache + code * g->width * g->height;
+	UINT8 *dst = out;
 	UINT32 any = 0, full = 0;
 	int x, y;
 
@@ -269,7 +271,7 @@ static void gfx_decode_element(struct stv_gfx *g, int code)
 		}
 
 	/* which rows have something to draw, and which are drawn whole */
-	dst = g->cache + code * g->width * g->height;
+	dst = out;
 	for (y = 0; y < g->height; y++, dst += g->width)
 	{
 		int n0 = 0;
@@ -280,43 +282,95 @@ static void gfx_decode_element(struct stv_gfx *g, int code)
 		if (n0 == 0)
 			full |= 1 << y;
 	}
-	g->rows_any[code] = (UINT16)any;
-	g->rows_full[code] = (UINT16)full;
+	*rows_any = (UINT16)any;
+	*rows_full = (UINT16)full;
+}
+
+static void gfx_decode_element(struct stv_gfx *g, int code)
+{
+	gfx_decode_into(g, code, g->cache + code * g->width * g->height,
+			&g->rows_any[code], &g->rows_full[code]);
 }
 
 #ifdef STV_VIDEO_THREADS
 /*
-	While the strips are drawn, a thread that finds an element stale
-	decodes it itself and leaves it marked stale: another thread that
-	reads it decodes it too, writing the same bytes, so no thread reads
-	an element another one is writing. The elements decoded are noted
-	per thread and marked clean once all the strips are drawn.
+	While the strips are drawn, the first band to find an element stale
+	claims it for the frame with a compare-and-swap, decodes it into the
+	cache and publishes it with a release store; the bands that find it
+	published read the cache. A band that finds it claimed but not yet
+	published decodes a copy of its own instead of waiting. The cache is
+	written by one thread and read only once published. The elements
+	decoded are noted per band and marked clean once all the strips are
+	drawn.
 */
 #define VDP2_DECODED_MAX	16384
 static VDP2_TLS int vdp2_band_index = -1;
-static UINT32 *vdp2_band_decoded[4];
-static int vdp2_band_decoded_count[4];
+static UINT32 *vdp2_band_decoded[BAND_POOL_MAX];
+static int vdp2_band_decoded_count[BAND_POOL_MAX];
+static retro_atomic_int_t *vdp2_claim[4];	/* per element: 2 * stamp claimed, 2 * stamp + 1 published */
+static int vdp2_claim_stamp;			/* the frame's stamp */
+static UINT8 vdp2_band_scratch[BAND_POOL_MAX][16 * 16];
+
+static const UINT8 *gfx_get_data_band(struct stv_gfx *g, int code, UINT32 *rows_any, UINT32 *rows_full)
+{
+	retro_atomic_int_t *claim = &vdp2_claim[g - stv_gfx][code];
+	const int busy = vdp2_claim_stamp * 2, published = busy + 1;
+	int c = retro_atomic_load_acquire_int(claim);
+
+	if (c != published)
+	{
+		if (c != busy && retro_atomic_cas_int(claim, c, busy))
+		{
+			const int b = vdp2_band_index;
+			gfx_decode_element(g, code);
+			retro_atomic_store_release_int(claim, published);
+			if (vdp2_band_decoded_count[b] < VDP2_DECODED_MAX)
+				vdp2_band_decoded[b][vdp2_band_decoded_count[b]++] = ((UINT32)(g - stv_gfx) << 24) | (UINT32)code;
+		}
+		else if (retro_atomic_load_acquire_int(claim) != published)
+		{
+			UINT8 *copy = vdp2_band_scratch[vdp2_band_index];
+			UINT16 any, full;
+			gfx_decode_into(g, code, copy, &any, &full);
+			if (rows_any)
+			{
+				*rows_any = any;
+				*rows_full = full;
+			}
+			return copy;
+		}
+	}
+	if (rows_any)
+	{
+		*rows_any = g->rows_any[code];
+		*rows_full = g->rows_full[code];
+	}
+	return g->cache + code * g->width * g->height;
+}
 #endif
 
-static INLINE const UINT8 *gfx_get_data(struct stv_gfx *g, int code)
+/* an element's pixels, and if asked its row masks */
+static INLINE const UINT8 *gfx_get_data_rows(struct stv_gfx *g, int code, UINT32 *rows_any, UINT32 *rows_full)
 {
 	code %= g->elements;
 	if (g->dirty[code])
 	{
-		gfx_decode_element(g, code);
 #ifdef STV_VIDEO_THREADS
 		if (vdp2_band_index >= 0)
-		{
-			int b = vdp2_band_index;
-			if (vdp2_band_decoded[b] && vdp2_band_decoded_count[b] < VDP2_DECODED_MAX)
-				vdp2_band_decoded[b][vdp2_band_decoded_count[b]++] = ((UINT32)(g - stv_gfx) << 24) | (UINT32)code;
-		}
-		else
+			return gfx_get_data_band(g, code, rows_any, rows_full);
 #endif
-			g->dirty[code] = 0;
+		gfx_decode_element(g, code);
+		g->dirty[code] = 0;
+	}
+	if (rows_any)
+	{
+		*rows_any = g->rows_any[code];
+		*rows_full = g->rows_full[code];
 	}
 	return g->cache + code * g->width * g->height;
 }
+
+#define gfx_get_data(g, code) gfx_get_data_rows((g), (code), NULL, NULL)
 
 #define gfx_element struct stv_gfx
 
@@ -6125,9 +6179,8 @@ static void vdp2_drawgfx_transpen(struct mame_bitmap *dest_bmp,const struct rect
 	int y;
 	int x;
 	const pen_t *pal = &PEN(0 + gfx->granularity * (color % gfx->colors));
-	const UINT8 *source_base = gfx_get_data(gfx, code % gfx->elements);
-	const UINT32 rows_any = gfx->rows_any[code % gfx->elements];
-	const UINT32 rows_full = gfx->rows_full[code % gfx->elements];
+	UINT32 rows_any, rows_full;
+	const UINT8 *source_base = gfx_get_data_rows(gfx, code % gfx->elements, &rows_any, &rows_full);
 	int x_index_base, y_index, sx, sy, ex, ey;
 	int xinc, yinc;
 
@@ -10287,25 +10340,14 @@ static void vdp2_render_layers(struct mame_bitmap *bitmap, const struct rectangl
 }
 
 #ifdef STV_VIDEO_THREADS
-#include <rthreads/rthreads.h>
+static band_pool_t vdp2_pool;
 
-#define VDP2_MAX_THREADS	4
-
-/* the band workers: band 0 is the main thread's, worker i draws band i */
+/* the job of a frame: the screen the strips are cut from */
 static struct
 {
-	sthread_t *thread[VDP2_MAX_THREADS];
-	int index[VDP2_MAX_THREADS];
-	slock_t *lock;
-	scond_t *start, *done;
-	int workers;		/* threads started */
-	int gen;			/* job number */
-	int bands;			/* bands of the job */
-	int pending;		/* worker bands not drawn yet */
-	int quit;
 	struct mame_bitmap *bitmap;
-	struct rectangle band[VDP2_MAX_THREADS];
-} vdp2_mt;
+	struct rectangle screen;
+} vdp2_job;
 
 /*
 	Thread i draws the strips i, i + n, i + 2n... of VDP2_STRIP lines:
@@ -10314,101 +10356,48 @@ static struct
 */
 #define VDP2_STRIP	16
 
-static void vdp2_render_band(struct mame_bitmap *bitmap, const struct rectangle *screen, int i, int n)
+static void vdp2_render_band(void *user, int i, int n)
 {
 	int y;
+	(void)user;
 	vdp2_band_index = i;
 	vdp2_band_decoded_count[i] = 0;
-	for (y = screen->min_y + i * VDP2_STRIP; y <= screen->max_y; y += n * VDP2_STRIP)
+	for (y = vdp2_job.screen.min_y + i * VDP2_STRIP; y <= vdp2_job.screen.max_y; y += n * VDP2_STRIP)
 	{
-		struct rectangle strip = *screen;
+		struct rectangle strip = vdp2_job.screen;
 		strip.min_y = y;
 		strip.max_y = y + VDP2_STRIP - 1;
-		if (strip.max_y > screen->max_y)
-			strip.max_y = screen->max_y;
-		vdp2_render_layers(bitmap, &strip, 1);
+		if (strip.max_y > vdp2_job.screen.max_y)
+			strip.max_y = vdp2_job.screen.max_y;
+		vdp2_render_layers(vdp2_job.bitmap, &strip, 1);
 	}
 	vdp2_band_index = -1;
-}
-
-static void vdp2_band_worker(void *arg)
-{
-	const int i = *(const int *)arg;
-	int seen = 0;
-
-	slock_lock(vdp2_mt.lock);
-	for (;;)
-	{
-		while (vdp2_mt.gen == seen && !vdp2_mt.quit)
-			scond_wait(vdp2_mt.start, vdp2_mt.lock);
-		if (vdp2_mt.quit)
-			break;
-		seen = vdp2_mt.gen;
-		if (i < vdp2_mt.bands)
-		{
-			struct rectangle screen = vdp2_mt.band[0];
-			struct mame_bitmap *bitmap = vdp2_mt.bitmap;
-			int bands = vdp2_mt.bands;
-			slock_unlock(vdp2_mt.lock);
-			vdp2_render_band(bitmap, &screen, i, bands);
-			slock_lock(vdp2_mt.lock);
-			if (--vdp2_mt.pending == 0)
-				scond_signal(vdp2_mt.done);
-		}
-	}
-	slock_unlock(vdp2_mt.lock);
 }
 
 static void vdp2_threads_stop(void)
 {
 	int i;
-	if (!vdp2_mt.lock)
-		return;
-	slock_lock(vdp2_mt.lock);
-	vdp2_mt.quit = 1;
-	scond_broadcast(vdp2_mt.start);
-	slock_unlock(vdp2_mt.lock);
-	for (i = 1; i < vdp2_mt.workers + 1; i++)
-		sthread_join(vdp2_mt.thread[i]);
-	scond_free(vdp2_mt.start);
-	scond_free(vdp2_mt.done);
-	slock_free(vdp2_mt.lock);
-	memset(&vdp2_mt, 0, sizeof(vdp2_mt));
-	for (i = 0; i < VDP2_MAX_THREADS; i++)
+	band_pool_stop(&vdp2_pool);
+	for (i = 0; i < BAND_POOL_MAX; i++)
 	{
 		free(vdp2_band_decoded[i]);
 		vdp2_band_decoded[i] = NULL;
 		vdp2_band_decoded_count[i] = 0;
 	}
+	for (i = 0; i < 4; i++)
+	{
+		free(vdp2_claim[i]);
+		vdp2_claim[i] = NULL;
+	}
+	vdp2_claim_stamp = 0;
 }
 
 /* the screen in bands, 0 if the threads are not there (then the caller draws it alone) */
 static int vdp2_render_threaded(struct mame_bitmap *bitmap, const struct rectangle *cliprect)
 {
-	int bands = options.stv_video_threads, i;
+	int bands = band_pool_prepare(&vdp2_pool, options.stv_video_threads), i;
 
-	if (bands > VDP2_MAX_THREADS)
-		bands = VDP2_MAX_THREADS;
-	if (!vdp2_mt.lock)
-	{
-		vdp2_mt.lock = slock_new();
-		vdp2_mt.start = scond_new();
-		vdp2_mt.done = scond_new();
-		if (!vdp2_mt.lock || !vdp2_mt.start || !vdp2_mt.done)
-			return 0;
-	}
-	while (vdp2_mt.workers < bands - 1)
-	{
-		i = vdp2_mt.workers + 1;
-		vdp2_mt.index[i] = i;
-		vdp2_mt.thread[i] = sthread_create(vdp2_band_worker, &vdp2_mt.index[i]);
-		if (!vdp2_mt.thread[i])
-			break;
-		vdp2_mt.workers++;
-	}
-	if (bands > vdp2_mt.workers + 1)
-		bands = vdp2_mt.workers + 1;
-	if (bands < 2)
+	if (!bands)
 		return 0;
 	for (i = 0; i < bands; i++)
 		if (!vdp2_band_decoded[i])
@@ -10417,6 +10406,19 @@ static int vdp2_render_threaded(struct mame_bitmap *bitmap, const struct rectang
 			if (!vdp2_band_decoded[i])
 				return 0;
 		}
+	/* a stamp names the frame's claims: when it wraps the old ones go */
+	vdp2_claim_stamp = (vdp2_claim_stamp % 0x3fffffff) + 1;
+	for (i = 0; i < 4; i++)
+		if (!vdp2_claim[i] || vdp2_claim_stamp == 1)
+		{
+			int e;
+			if (!vdp2_claim[i])
+				vdp2_claim[i] = malloc(stv_gfx[i].elements * sizeof(retro_atomic_int_t));
+			if (!vdp2_claim[i])
+				return 0;
+			for (e = 0; e < stv_gfx[i].elements; e++)
+				retro_atomic_int_init(&vdp2_claim[i][e], 0);
+		}
 
 	/* the rotation plane caches first, alone */
 	vdp2_render_mode = VDP2_RENDER_PREPASS;
@@ -10424,21 +10426,9 @@ static int vdp2_render_threaded(struct mame_bitmap *bitmap, const struct rectang
 
 	/* then the bands */
 	vdp2_render_mode = VDP2_RENDER_BAND;
-	vdp2_mt.band[0] = *cliprect;
-	slock_lock(vdp2_mt.lock);
-	vdp2_mt.bitmap = bitmap;
-	vdp2_mt.bands = bands;
-	vdp2_mt.pending = bands - 1;
-	vdp2_mt.gen++;
-	scond_broadcast(vdp2_mt.start);
-	slock_unlock(vdp2_mt.lock);
-
-	vdp2_render_band(bitmap, cliprect, 0, bands);
-
-	slock_lock(vdp2_mt.lock);
-	while (vdp2_mt.pending)
-		scond_wait(vdp2_mt.done, vdp2_mt.lock);
-	slock_unlock(vdp2_mt.lock);
+	vdp2_job.bitmap = bitmap;
+	vdp2_job.screen = *cliprect;
+	band_pool_run(&vdp2_pool, bands, vdp2_render_band, NULL);
 
 	/* the elements the strips decoded are up to date now */
 	for (i = 0; i < bands; i++)

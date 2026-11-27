@@ -1070,6 +1070,9 @@ SOURCES_C += \
 	$(CORE_DIR)/drivers/calorie.c \
     $(CORE_DIR)/drivers/hvyunit.c \
     $(CORE_DIR)/drivers/akkaarrh.c \
+    $(CORE_DIR)/drivers/wyvernf0.c \
+    $(CORE_DIR)/drivers/metlfrzr.c \
+    $(CORE_DIR)/vidhrdw/galastrm_vidhrdw.c $(CORE_DIR)/drivers/galastrm.c \
 	$(CORE_DIR)/machine/mc8123.c \
 	$(CORE_DIR)/machine/namcoio_machine.c \
 	$(CORE_DIR)/drivers/tatsumi.c $(CORE_DIR)/vidhrdw/tatsumi.c $(CORE_DIR)/machine/tatsumi.c \
@@ -2863,10 +2866,13 @@ SOURCES_C += \
 # sljit: run-time code generator of the MIPS recompilers (empty where they are not supported)
 SOURCES_C += $(CORE_DIR)/lib/sljit/sljit_mame.c
 
-# threads (libretro-common rthreads, set by the platform: see Makefile): the ST-V threaded video option
+# threads (libretro-common rthreads, set by the platform: see Makefile): the
+# band workers of the threaded video options
 ifeq ($(HAVE_THREADS),1)
 COREDEFINES += -DHAVE_THREADS
+SOURCES_C += $(CORE_DIR)/band_pool.c
 SOURCES_C += $(LIBRETRO_COMM_DIR)/rthreads/rthreads.c
+SOURCES_C += $(LIBRETRO_COMM_DIR)/rthreads/retro_eventcount.c
 endif
 
 ifeq ($(STATIC_LINKING),1)
@@ -2882,6 +2888,10 @@ SOURCES_C += \
 	$(LIBRETRO_COMM_DIR)/file/file_path.c \
 	$(LIBRETRO_COMM_DIR)/file/file_path_io.c \
 	$(LIBRETRO_COMM_DIR)/streams/file_stream.c \
+	$(LIBRETRO_COMM_DIR)/streams/trans_stream_deflate.c \
+	$(LIBRETRO_COMM_DIR)/encodings/encoding_deflate.c \
+	$(LIBRETRO_COMM_DIR)/string/rstrtod.c \
+	$(LIBRETRO_COMM_DIR)/features/features_cpu.c \
 	$(LIBRETRO_COMM_DIR)/streams/file_stream_transforms.c \
 	$(LIBRETRO_COMM_DIR)/streams/interface_stream.c \
 	$(LIBRETRO_COMM_DIR)/streams/memory_stream.c \

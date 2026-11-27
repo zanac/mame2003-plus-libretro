@@ -221,6 +221,7 @@ const struct GameDriver *test_drivers[] =
 	DRIVER( checkmaj )	/* (c) 1982 Jaleco (Zenitone/Zilec in ROM CM4, and the programmer names) */
 	DRIVER( dingo )		/* (c) 1983 Ashby Computers and Graphics LTD. + Jaleco license */
 	DRIVER( blkhole )	/* TDS (Tokyo Denshi Sekkei) */
+	DRIVER( 119 )		/* (c) 1986 Coreland / Sega */
 	DRIVER( kingball )	/* (c) 1980 Namco */
 	DRIVER( kingbalj )	/* (c) 1980 Namco */
 	DRIVER( scorpnmc )	/* bootleg */
@@ -1457,6 +1458,8 @@ const struct GameDriver *test_drivers[] =
 	DRIVER( tsamura2 )	/* A35 (c) 1985 Taito */
 	DRIVER( nunchaku )	/* ??? (c) 1985 Taito */
 	DRIVER( yamagchi )	/* A38 (c) 1985 Taito */
+  DRIVER( wyvernf0 )	/* A39 (c) 1985 Taito Corporation */
+	DRIVER( wyvernf0a ) /* A39 (c) 1985 Taito Corporation */
 	DRIVER( m660 )      /* ??? (c) 1986 Taito America Corporation */
 	DRIVER( m660j )     /* ??? (c) 1986 Taito Corporation (Japan) */
 	DRIVER( m660b )     /* bootleg */
@@ -1681,6 +1684,7 @@ const struct GameDriver *test_drivers[] =
 	DRIVER( ainferno )	/* C45 (c) 1990 Taito America Corporation (US) */
 
 	/* enhanced Z-System hardware games */
+  DRIVER( galastrm )	/* C99 (c) 1992 Taito Corporation (Japan) */
 	DRIVER( gunbustr )	/* D27 (c) 1992 Taito Corporation (Japan) */
 	DRIVER( superchs )	/* D46 (c) 1992 Taito America Corporation (US) */
 	DRIVER( groundfx )	/* D51 (c) 1992 Taito Coporation */
@@ -2563,6 +2567,8 @@ V-V                           TP-027
 	DRIVER( spf2ta )     /* Capcom, Super Puzzle Fighter II Turbo (Asia 960529) */
 	DRIVER( spf2th )     /* Capcom, Super Puzzle Fighter II Turbo (Hispanic 960531) */
 	DRIVER( spf2xpri )   /* hack, Super Puzzle Fighter 2 X' (X Prime rebalance of Euro 960529) */
+	DRIVER( spf2enh )    /* hack, Super Puzzle Fighter 2 Turbo X" (X' plus Zangief and Ibuki) */
+	DRIVER( fixfelc2 )   /* homebrew, Fix-It Felix Jr. (CPS2) */
 	DRIVER( megaman2 )   /* Capcom, Mega Man 2: The Power Fighters (USA 960708) */
 	DRIVER( megaman2a )  /* Capcom, Mega Man 2: The Power Fighters (Asia 960708) */
 	DRIVER( rockman2j )  /* Capcom, Rockman 2: The Power Fighters (Japan 960708) */
@@ -2640,6 +2646,7 @@ V-V                           TP-027
 	DRIVER( sfz3a )      /* Capcom, Street Fighter Zero 3 (Asia 980904) */
 	DRIVER( sfz3ar1 )    /* Capcom, Street Fighter Zero 3 (Asia 980701) */
 	DRIVER( sfz3mix )    /* hack, Street Fighter Zero 3 Mix v0.32 (CPS2Turbo, Zero800) */
+	DRIVER( vsav2e )     /* bootleg, Darkstalkers 3 (Vampire Savior 2 full roster English bootleg) */
 	DRIVER( jyangoku )   /* Capcom, Jyangokushi: Haoh no Saihai (Japan 990527) */
 	DRIVER( hsf2 )       /* Capcom, Hyper Street Fighter II: The Anniversary Edition (USA 040202) */
 	DRIVER( hsf2a )      /* Capcom, Hyper Street Fighter II: The Anniversary Edition (Asia 040202) */
@@ -3733,6 +3740,7 @@ BOMULEUL CHAJARA SEGA ST-V  1997/04/11
 	DRIVER( ichirj )		/* (c) 1994 Sega */
 	DRIVER( ichirjbl )	/* (c) 1994 bootleg */
 	DRIVER( puyopuy2 )	/* (c) 1994 Compile (Sega license) */
+	DRIVER( puyopuy2e )	/* bootleg (English translation) */
 	DRIVER( zunkyou )		/* (c) 1994 Sega */
 	DRIVER( headonch )	/* (c) 1994 hack */
 	DRIVER( pclubj )		/* (c) 1995 Atlus */
@@ -5416,6 +5424,7 @@ BOMULEUL CHAJARA SEGA ST-V  1997/04/11
 	DRIVER( ghunter )	/* (c) 1988 Seibu Kaihatsu + Segasa/Sonic license */
 	DRIVER( dynduke )	/* (c) 1989 Seibu Kaihatsu + Fabtek license */
 	DRIVER( dbldyn )	/* (c) 1989 Seibu Kaihatsu + Fabtek license */
+  DRIVER( metlfrzr )	/* (c) 1989 Seibu Kaihatsu */
 	DRIVER( raiden )	/* (c) 1990 Seibu Kaihatsu */
 	DRIVER( raidena )	/* (c) 1990 Seibu Kaihatsu */
 	DRIVER( raidenk )	/* (c) 1990 Seibu Kaihatsu + IBL Corporation license */
@@ -6680,6 +6689,8 @@ Other Sun games
 	DRIVER( turfmast )	/* 0200 (c) 1996 Nazca */
 	DRIVER( mslug )		/* 0201 (c) 1996 Nazca */
 	DRIVER( puzzledp )	/* 0202 (c) 1995 Taito (Visco license) */
+	DRIVER( spf2ng )	/* homebrew: Super Puzzle Fighter 2 Turbo X" (Neo Geo) */
+	DRIVER( fixfelng )	/* homebrew: Fix-It Felix Jr. (NEO GEO) */
 	DRIVER( mosyougi )	/* 0203 (c) 1995 ADK / SNK */
 	/* 0204 QP (prototype) */
 	/* 0205 Neo-Geo CD Special (CD only) */
